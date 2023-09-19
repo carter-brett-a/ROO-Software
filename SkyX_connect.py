@@ -13,13 +13,13 @@ import win32com.client
 import time
 
 #TheSkyX Telescope
-teleObj = win32com.client.Dispatch("TheSkyXAdaptor.RASCOMTele")
+teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 
 #TheSkyX main camera
-camObj = win32com.client.Dispatch("CCDSoft2XAdaptor.ccdsoft5Camera")
+camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
 
 #TheSkyX Object
-theSkyObj = win32com.client.Dispatch("TheSkyXAdaptor.RASCOMTheSky")
+theSkyObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTheSky")
 
 #connect to mount
 print("Connecting to mount")
@@ -46,3 +46,4 @@ teleObj.SetTracking(0,1,0,0)
 #connect up autoguider...? Cannot see how to do this easily... maybe we'll revisit when we need it!!!
 
 #then you're all done!!
+
