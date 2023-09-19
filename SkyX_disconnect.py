@@ -12,15 +12,15 @@ This code was developed as part of RMIT University's Robotic Optical Observatory
 import win32com.client
 
 #TheSkyX Telescope
-teleObj = win32com.client.Dispatch("TheSkyXAdaptor.RASCOMTele")
+teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 teleObj.Connect()
 
 #TheSkyX main camera
-camObj = win32com.client.Dispatch("CCDSoft2XAdaptor.ccdsoft5Camera")
+camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
 camObj.Connect()
 
 #TheSkyX Object
-theSkyObj = win32com.client.Dispatch("TheSkyXAdaptor.RASCOMTheSky")
+theSkyObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTheSky")
 
 #dome object
 domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
@@ -38,7 +38,7 @@ camObj.Disconnect()
 
 #park dome (manually selected here to match what we've told ScopeDomeLS)
 print("Parking dome")
-domeObj.SlewToAzimuth(256)
+domeObj.SlewToAzimuth(78)
 
 #disconnect up the dome
 print("Disconnecting dome")
