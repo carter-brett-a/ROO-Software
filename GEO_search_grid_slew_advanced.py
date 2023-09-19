@@ -52,6 +52,8 @@ import pandas as pd
 import json
 import requests
 import base64
+from cryptography.fernet import Fernet
+from io import StringIO
 
 
 floor = math.floor
@@ -123,6 +125,7 @@ def satellite_detect(image_dir, filename, png_key, csv_key):
     sigma = 3.0 * gaussian_fwhm_to_sigma  # FWHM = 3.
     kernel = Gaussian2DKernel(sigma, x_size=3, y_size=3)
     kernel.normalize()
+    #kernel.normalize()
     #npixels = 25
     npixels = 15
         
@@ -133,16 +136,16 @@ def satellite_detect(image_dir, filename, png_key, csv_key):
     
     
     #segm = detect_sources(data, threshold, npixels=25, kernel=kernel)
-    segm = detect_sources(data, threshold, npixels=15, kernel=kernel)
+    segm = detect_sources(data, threshold, npixels=15)
         
     if segm is None:
         print("No sources found... bad image")
             
     if segm is not None:
         print("Deplending now.")
-        segm_deblend = deblend_sources(data, segm, npixels=npixels,
-                                           kernel=kernel, nlevels=32,
-                                           contrast=0.001)
+            
+        segm_deblend = deblend_sources(data, segm, npixels, labels=None, nlevels=32, contrast=0.001)
+
                 
         print("Deplending complete.")
                 
@@ -654,15 +657,6 @@ def csv_2_json(cleaned_csv,obs,expTime):
     #service_endpoint_test = 'https://test.unifieddatalibrary.com/udl/eoobservations'
     #service_endpoint_production = 'https://unifieddatalibrary.com/udl/eoobservation'
     
-
-    #latest (see email on 1/4/2022, need to wait for the go ahead from Murtaza)
-    file = "UDL_creds.txt"
-    dat = pd.read_csv(file, sep = ' ',index_col = False)
-    user = dat.user[0]
-    password = dat.password[0]
-    service_endpoint_production = 'https://unifieddatalibrary.com/filedrop/udl-eo'
-
-
     for i in range (0,rx):
 
         json_data = {}
@@ -689,11 +683,41 @@ def csv_2_json(cleaned_csv,obs,expTime):
     with open(cleaned_csv+'.json', 'w') as fp:
         json.dump(json_data_nest, fp, indent = 4)
 
-    #UDL uploading
+    #UDL uploading_ Encrytion key needs to be regenerated, UDL posting not possible at this time..
+    
+    #with open('dirs.txt','rb') as dirs:
+        #dir = str(dirs.read(),'utf-8')
+
+    #with open(dir + 'udl_key.key','rb') as filekey:    
+        #key = filekey.read()
+    
+    #fernet = Fernet(key)
+    
+    #Testing
+    #file_encrypted = "UDL_creds_test.txt"
+    #service_endpoint_test = 'https://test.unifieddatalibrary.com/filedrop/udl-eo'    
+    
+    #LIVE
+    #file_encrypted = "UDL_creds.txt"
+    #service_endpoint_production = 'https://unifieddatalibrary.com/filedrop/udl-eo'
+    
+    
+    #with open(file_encrypted,'rb') as enc_file:
+        #encrypted = enc_file.read()
+    
+    #decrypted = fernet.decrypt(encrypted)
+    #s = str(decrypted,'utf-8')
+    #datastring = StringIO(s)
+    #dat = pd.read_csv(datastring,sep = ' ',index_col = False)
+    #user = dat.user[0]
+    #password = dat.password[0]
+    
+    
     #Testing
     #post_to_udl_json_data(service_endpoint_test, user, password, json_data_nest)
+    
     #LIVE
-    post_to_udl_json_data(service_endpoint_production, user, password, json_data_nest)
+    #post_to_udl_json_data(service_endpoint_production, user, password, json_data_nest)
 
 
 
@@ -731,15 +755,15 @@ start_time_str = time.asctime()
     
 #######################################
 #TheSkyX objects
-skyChartObj = win32com.client.Dispatch("TheSkyXAdaptor.StarChart")
+skyChartObj = win32com.client.Dispatch("TheSky64.sky6StarChart")
 
 #TheskyX Telescope
-teleObj = win32com.client.Dispatch("TheSkyXAdaptor.RASCOMTele")
+teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 teleObj.Connect()
 
 
 #TheSkyX Camera
-camObj = win32com.client.Dispatch("CCDSoft2XAdaptor.ccdsoft5Camera")
+camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
 camObj.Connect()
 
 #actual ASCOM dome object (for shutter status checks)
@@ -747,7 +771,7 @@ domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
 domeObj.Connected = True
 
 #setting up SkyX's imagelink
-imagelinkObj = win32com.client.Dispatch("TheSkyX.ImageLink")
+imagelinkObj = win32com.client.Dispatch("TheSky64.ImageLink")
 imagelinkObj.Scale = 1.1 
 
 # exposure time (in sec) of each image
@@ -785,7 +809,7 @@ sat_long = []
 
 #azimuth range for GEO search 270,90 for full search, and if only a portion is to be searched, this can be changed here...
 azi_ran = [309, 90] #Building blocks anything west of 308 azimuth, so it's a good starting point
-
+#azi_ran = [42,47]
 
 ###################################
 ###################################
@@ -793,8 +817,8 @@ azi_ran = [309, 90] #Building blocks anything west of 308 azimuth, so it's a goo
 #implemented, but requires testing... looks like it's working to me
 #Important note... the first item must be less than the second item
 #long_ran = [-180,180]
-long_ran = [0,180]
-long_ran = [130,145]
+#long_ran = [0,180]
+long_ran = [90,180]
 
 if long_ran[1] < long_ran[0]:
     print("The longitude range must start with the smaller value first")
@@ -843,7 +867,7 @@ print('***')
 print(elev)
 print('***')
 print(sat_long)
-#sys.exit()
+sys.exit()
 
 
 #now, the trick is that perhaps you want say a couple of degs either side of the "base elevation" array, which is where the GEO belt is
@@ -863,149 +887,169 @@ d_elev = np.zeros(1)
 #initialising indicies to help extract the correct azimuth and elevation values
 index = 0
 
-
-for x in azi:
+count = 0
+repeat = True
+azi2 = []
+elev2 = []
+# Brett's attempt at fixing issues aroubd failed regos, not working.. need to circle back
+#while repeat == True:
     
+    #if count == 0:
+     #   repeat = False
+    
+for x in azi:
     azimuth = x
     
     print("Telescope is currently scanning at azimuth ",azimuth)
     
     for y in d_elev:
-        
+    
         elevation = elev[index]+y
-        
+    
         print("Elevation ",elevation)
-        
+    
         #command to slew telescope
         try:
-            
-            teleObj.SlewToAzAlt(azimuth, elevation, 'Az_%d_Elev_%d' % (azimuth, elevation))
         
+            teleObj.SlewToAzAlt(azimuth, elevation, 'Az_%d_Elev_%d' % (azimuth, elevation))
+    
         except com_error as err:
-            
+        
             if err.excepinfo[5] == -2147198493:
-            
+        
                 print("Encountered hard slew limit error... continuing on to next position")
-                
-                continue
             
+                continue
+        
             else:
                 raise err
     
         if teleObj.Asynchronous == True:
             while teleObj.IsSlewComplete == False:
                 time.sleep(0.1)
-        
+    
         #turning tracking off (automatically goes to sidreal tracking after slew)
         teleObj.SetTracking(0,1,0,0)
 
         # light exposure
         #print("Taking exposure... NOOOOTT (we're testing it!!!)")
         #time.sleep(0.1)
-        
+    
         #initialising the any_sats flag... (new, this could be where I was stuffing up earlier...)
         any_sats = False
-        
+    
+        #initialising the number of imagess that failed registration
+        rego_fail_count = 0
         for i in range(1,image_num+1):
-            
+        
             #Doing a shutter status check
             #Shutter status ( 0 = open, 1 = closed, 2 = opening, 3 - closing, from trial and error)
             stat = domeObj.ShutterStatus
-    
+
             if stat != 0:
-               pause_til_safe()
-            
+                pause_til_safe()
+        
             camObj.TakeImage()
             if camObj.Asynchronous == True:
                 while camObj.IsExposureComplete == False:
                     time.sleep(0.1)
-            
+        
             last_image = camObj.LastImageFileName
             last_image_dir = camObj.AutoSavePath
-            
+        
             saved_csvs = last_image_dir+'/'+'CSVs'
             #just extracting the filename without the path for use in the CSV and PNG naming later on...
             fit_name = os.path.basename(last_image)
-            
+        
             #working out whether there are any possible satellites in the image
             possible_sats, xpos, ypos = satellite_detect(last_image_dir, last_image, True, True)
-            
+        
             #if there aren't any possible satellites, then don't bother taking more images... move on
             #if i == 1 and possible_sats == False:
             #    break
-            
+        
             #initialising angles data (in first of image batch) - this line here takes into account possibility that first image rego fails
             if i == 1:
                 ang_data = Table(names=('Time', 'XPOS', 'YPOS', 'RA', 'DEC'), dtype=('S2', 'f4', 'f4','d','d'))
-        
+    
             if possible_sats == True:
-                    #do image registration...!
+                #do image registration...!
                 print("Doing image registration...")
-                
+            
                 image_link_success = False
-                
+            
                 try:
                     imagelinkObj.PathToFITS = last_image
                     imagelinkObj.execute()
-            
+        
                 except com_error as err:
-            
+        
                     if err.excepinfo[5] == 0:
                         print("Image Link failed...")
+                        rego_fail_count += 1
                         #continue
                     else:
                         raise err
                 else:
-                
-                    image_link_success = True
             
+                    image_link_success = True
+        
+        
                 if image_link_success == True:
                     print("Successful registration, extracting angles for suspected satellite(s)")
-                    
                 
+            
                     hdul = fits.open(last_image)
                     hdr = hdul[0].header
                     hdul.close()
                     date_obs = hdr['DATE-OBS']
                     exp = float(hdr['EXPTIME']) * u.s
                     latency = 0.81 * u.s
-                    
+                
                     #time_corrections (camera latency, and taking mid-point of exposure)
                     t = Time(date_obs, format='isot',scale='utc') + TimeDelta(exp/2)
                     t += TimeDelta(latency)
-                    
-                    date_obs_corr = str(t)
-                    
-                    w = WCS(hdr)
                 
+                    date_obs_corr = str(t)
+                
+                    w = WCS(hdr)
+            
                     #cycling through the number of objects in image and saving RA and Dec
                     for j, ind in enumerate(xpos):
                         sky = w.pixel_to_world(xpos[j],ypos[j])
-                    
+                
                         print("Dec: ",sky.dec.deg)
                         print("RA: ",sky.ra.deg)
-            
+        
                         any_sats = True
                         ang_data.add_row([date_obs_corr, xpos[j], ypos[j], sky.ra.deg, sky.dec.deg])            
+        
+                if rego_fail_count >= 3:
+                    azi2.append(azimuth)
+                    elev2.append(elev[index])
+                    repeat = True
             
-                    
-                
             #only writing the data to file once the batch of 5 images have been taken, providing there are some angles that were extracted
             if i == image_num and any_sats == True:
                 ang_data.write(saved_csvs+"/"+"angles"+fit_name+".csv",format = "ascii.csv")
                 print("Angles saved")
-                
-                
+            
+            
                 print("Performing data cleaning...")
                 cleaned_csv = data_cleaning(saved_csvs,"angles"+fit_name+".csv")
-                
+            
                 if cleaned_csv != False:
                     print("Now converting to JSON...")
                     json_dat = csv_2_json(cleaned_csv,obs,expTime)
-                    
+                
     
     index += 1
-
+# part of the code handling failed regos. 
+   # if (repeat == True) & (count == 0):
+     #   azi = azi2
+      #  elev = elev2
+       # index = 0
+        #count = 1
 
 print("Finished GEO search pattern")
 
