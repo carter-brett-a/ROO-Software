@@ -1,0 +1,68 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Sep  1 14:47:41 2023
+
+@author: Kaifur Rashed
+"""
+import datetime
+import win32com.client
+import math
+# Input coordinates in degrees
+ra1_deg = 225.0
+dec1_deg = -43.0
+ra2_deg = 250.0
+dec2_deg = -24.0
+
+def calculate_angular_distance(ra1_deg, dec1_deg, ra2_deg, dec2_deg):
+    # Convert degrees to radians
+    ra1_rad = math.radians(ra1_deg)
+    dec1_rad = math.radians(dec1_deg)
+    ra2_rad = math.radians(ra2_deg)
+    dec2_rad = math.radians(dec2_deg)
+
+    # Calculate angular distance using spherical law of cosines formula
+    cos_distance = math.sin(dec1_rad) * math.sin(dec2_rad) + \
+                   math.cos(dec1_rad) * math.cos(dec2_rad) * math.cos(ra2_rad - ra1_rad)
+
+    # Ensure the value is within the valid range for arccos
+    cos_distance = min(1.0, max(-1.0, cos_distance))
+
+    # Calculate the angular distance in radians
+    angular_distance_rad = math.acos(cos_distance)
+
+    # Convert radians to degrees
+    angular_distance_deg = math.degrees(angular_distance_rad)
+    return angular_distance_deg
+
+teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+
+# Connect Telescope
+teleobj.Connect()
+
+# Get RA Dec of Telescope
+teleobj.GetRaDec()
+
+# Calculate angular distance
+angular_distance = calculate_angular_distance(ra1_deg, dec1_deg, ra2_deg, dec2_deg)
+# Slew to first position
+teleobj.SlewToRaDec(ra1_deg, dec1_deg, 'A')
+# Wait until the slew is complete
+while teleobj.IsSlewComplete != 1:
+    pass
+# Record the time once the slew is complete
+start = datetime.datetime.now()
+
+# Slew to second position
+teleobj.SlewToRaDec(ra2_deg, dec2_deg, 'B')
+# Wait until the slew is complete
+while teleobj.IsSlewComplete != 1:
+    pass
+# Record the time once the slew is complete
+end = datetime.datetime.now()
+
+# Calculate time difference
+time_diff = (end - start).total_seconds()
+# Calculate speed of telescope movement (degrees per second)
+telescope_speed = angular_distance / time_diff
+print("Angular distance:", angular_distance, "degrees")
+print("Telescope speed:", telescope_speed, "degrees/s")
