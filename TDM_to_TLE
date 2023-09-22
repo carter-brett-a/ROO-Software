@@ -1,0 +1,130 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Sep 22 13:58:23 2023
+
+@author: Kaifur Rashed
+"""
+
+import os
+import numpy as np
+from scipy.optimize import minimize
+import datetime
+
+# Constants
+mu = 398600.4418  # Standard gravitational parameter for Earth in km^3/s^2
+
+def parse_tdm_file(tdm_file):
+    observation_data = []
+    data_started = False
+    with open(tdm_file, 'r') as file:
+        for line in file:
+            line = line.strip()
+            if line == "DATA_START":
+                data_started = True
+                continue
+            elif line == "DATA_STOP":
+                break
+            if data_started:
+                if line.startswith("TIME ="):
+                    timestamp_str = line.split("=")[1].strip()  # Extract timestamp string
+                    try:
+                        timestamp = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+                    except ValueError:
+                        print(f"Skipping line: {line}")
+                        continue
+                elif line.startswith("ANGLE_1 ="):
+                    azimuth = float(line.split("=")[1].strip())
+                elif line.startswith("ANGLE_2 ="):
+                    elevation = float(line.split("=")[1].strip())
+                    observation_data.append((timestamp, azimuth, elevation))
+    return np.array(observation_data)
+
+# Function to calculate residuals (sum of squares of differences between observed and computed azimuth and elevation)
+def residuals(tle_elements, data):
+    residuals = []
+
+    for timestamp, azimuth_observed, elevation_observed in data:
+        x, y, z = calculate_position_vector(tle_elements, timestamp.timestamp())
+        r = np.sqrt(x**2 + y**2 + z**2)
+        theta = np.arctan2(y, x)
+        phi = np.arctan2(z, np.sqrt(x**2 + y**2))
+        az_predicted = theta
+        el_predicted = np.pi / 2 - phi
+        residuals.extend([(az_predicted - azimuth_observed)**2, (el_predicted - elevation_observed)**2])
+
+    return np.sum(residuals)
+
+# Function to calculate position vector from TLE elements
+def calculate_position_vector(tle_elements, t):
+    a, e, i, Omega, omega, E0, M0 = tle_elements
+    n = np.sqrt(mu / a**3)
+    M = M0 + n * t
+    E = calculate_eccentric_anomaly(M, e)
+    nu = 2 * np.arctan2(np.sqrt(1 + e) * np.sin(E / 2), np.sqrt(1 - e) * np.cos(E / 2))
+    r = a * (1 - e * np.cos(E))
+    x = r * (np.cos(Omega) * np.cos(omega + nu) - np.sin(Omega) * np.sin(omega + nu) * np.cos(i))
+    y = r * (np.sin(Omega) * np.cos(omega + nu) + np.cos(Omega) * np.sin(omega + nu) * np.cos(i))
+    z = r * (np.sin(omega + nu) * np.sin(i))
+    return x, y, z
+
+def calculate_eccentric_anomaly(M, e):
+    f = lambda E: E - e * np.sin(E) - M
+    E0 = M
+    eccentric_anomaly = minimize(f, E0).x[0]
+    return eccentric_anomaly
+
+# Specify the folder where the TDM files are located
+tdm_folder = 'C:/Scratch/35756tdm/'
+
+# Get a list of all TDM files in the folder
+tdm_file = [file for file in os.listdir(tdm_folder) if file.endswith('.tdm.txt')]
+
+# Specify the folder where the TLE files will be saved
+tle_output_folder = 'C:/Scratch/TLE/'
+
+# Create the output folder if it doesn't exist
+if not os.path.exists(tle_output_folder):
+    os.makedirs(tle_output_folder)
+
+# Process each TDM file and generate corresponding TLE
+for tdm_file_name in tdm_file:
+    # Load observation data from the TDM file
+    tdm_file_path = os.path.join(tdm_folder, tdm_file_name)
+    observation_data = parse_tdm_file(tdm_file_path)  # Pass the tdm_file_path as an argument
+
+    # Check if there is at least one data point in the observation_data list
+    if len(observation_data) > 0:
+        # Initial guess for TLE elements (semi-major axis, eccentricity, inclination, RAAN, argument of perigee, mean anomaly)
+        tle_elements_guess = [7000, 0.001, np.radians(45), np.radians(90), np.radians(90), np.radians(0), np.radians(0)]
+
+        # Perform Gauss method optimization to determine TLE elements
+        result = minimize(residuals, tle_elements_guess, args=(observation_data,), method='Nelder-Mead')
+
+        # Extract the optimized TLE elements
+        optimized_tle_elements = result.x
+
+        # Generate the TLE string
+        line1 = "1 99999U 00000A   21100.00000000  .00000000  00000-0  00000-0 0  0001"
+        line2 = "2 99999 {} 000.0000  00.0000 0000000  00.0000 000.0000 15  0001".format(
+            int(optimized_tle_elements[0]),
+            round(optimized_tle_elements[1], 7),
+            round(np.degrees(optimized_tle_elements[2]), 4),
+            round(np.degrees(optimized_tle_elements[3]), 4),
+            round(np.degrees(optimized_tle_elements[4]), 4),
+            round(np.degrees(optimized_tle_elements[5]), 4),
+            int(observation_data[0][0].timestamp()))
+
+        # Determine the TLE file name with "_TLE" added
+        tle_file_name = os.path.splitext(tdm_file_name)[0] + '_TLE.dat'
+
+        # Create the full path for the TLE file
+        tle_file_path = os.path.join(tle_output_folder, tle_file_name)
+
+        # Save the TLE to a .dat file
+        with open(tle_file_path, 'w') as tle_file:
+            tle_file.write(line1 + '\n')
+            tle_file.write(line2 + '\n')
+
+        print("Optimized TLE elements saved to", tle_file_path)
+    else:
+        print(f"No observation data found in {tdm_file_name}. Skipping.")
