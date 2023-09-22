@@ -441,7 +441,7 @@ def pause_til_safe():
     #shutter and exits so that the rest of the operations can resume
     
     #first grab safety status
-    folder = "C:/Users/RMIT/AppData/Local/VirtualStore/Program Files (x86)/AAG_CloudWatcher/"
+    folder = "C:/AAG_CloudWatcher/"
     file = folder+"CloudWatcher.csv"
     #file = folder+"CloudWatcher_test.csv"
     
@@ -867,7 +867,7 @@ print('***')
 print(elev)
 print('***')
 print(sat_long)
-sys.exit()
+#sys.exit()
 
 
 #now, the trick is that perhaps you want say a couple of degs either side of the "base elevation" array, which is where the GEO belt is
