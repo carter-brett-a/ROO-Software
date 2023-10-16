@@ -19,6 +19,8 @@ to capture the wider GEO region (e.g., searching for non-zero inclinations).
 This version of the code has also been developed to automatically upload JSON data up to the UDL (Sai helped with this). The code also has a "pause until safe" routine that's triggered by a 
 closed/closing shutter... it also checks for power issues...
 
+This version also includes the added capability of pausing and resuming the GEO search using JSON files (Kaifur Rashed helped with this).
+
 This is the primary operational code for the SACT exercise, and is actually our first intended routine GEO monitoring code for the daily operations of ROO (eventually)
 
 
@@ -73,7 +75,7 @@ asin = math.asin
 acos = math.acos
  
 # Specify the folder path for JSON files
-folder_path = "C:\Telescope_Codes\JSON"
+folder_path = "C:\Telescope_Data\OneDrive - RMIT University\Science\Telescope\Data_subset\JSON"
 teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS") 
  
@@ -90,7 +92,7 @@ def process_json_files_thread(folder_path, scheduled_observations):
 
                 with open(json_file_path, 'r') as json_file:
                     data = json.load(json_file)
-                    target_ra = float(data['ra'])
+                    target_ra = data['ra']
                     target_dec = float(data['dec'])
                     target_time = data['time']
                     exposure_time = float(data['exposure time'])
@@ -108,7 +110,9 @@ def process_json_files_thread(folder_path, scheduled_observations):
                             if len(scheduled_observations) == 0:
                                 scheduled_observations.append((target_datetime, target_ra, target_dec, exposure_time, file_name))
                             else:
-                                if scheduled_observations[len(scheduled_observations) -1][0] != target_datetime: #Attempt to stop same observation being appended
+                                #this little section isn't working properly... 
+                                #I reckon it's the if statement.. it's just endlessly appending once a second observation JSON file gets added
+                                if scheduled_observations[len(scheduled_observations) - 1][0] != target_datetime: #Attempt to stop same observation being appended
                                     scheduled_observations.append((target_datetime, target_ra, target_dec, exposure_time, file_name))
                                     print(f"Scheduled observation for RA: {target_ra}, Dec: {target_dec} at {target_datetime}")
                         #else:
@@ -118,7 +122,8 @@ def process_json_files_thread(folder_path, scheduled_observations):
         #time.sleep(300)  # Check every 5 minutes 
 def check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observation, folder_path):
     current_time = datetime.datetime.now()
-    target_datetime, target_ra, target_dec, file_name, exposure_time = observation
+    target_datetime, target_ra, target_dec, exposure_time, file_name = observation
+    
     # Calculate slewing time 5 minutes before the specified time
     slewing_time = target_datetime - datetime.timedelta(minutes=5)
     # Doing a shutter status check
@@ -154,7 +159,8 @@ def check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observ
         while datetime.datetime.now() < target_datetime:
             pass
 
-        # Check if the exposure time exceeds the maximum allowed (5 seconds) - Throwing error at the moment, recongizes exposure_time as string
+        # Check if the exposure time exceeds the maximum allowed (5 seconds) - 
+        #Throwing error at the moment, recongizes exposure_time as string - I reckon I fixed it... we were sending this the file name
         if exposure_time <= 5.0:
             # Set the camera exposure time
             camObj.ExposureTime = exposure_time
