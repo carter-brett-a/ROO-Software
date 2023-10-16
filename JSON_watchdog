@@ -3,7 +3,7 @@
 Created on Fri Oct 13 17:18:29 2023
 This code uses watchdog function to recognize new JSON files in a given folder. It still needs some work to include img capture, etc.
 
-@author: E123197
+@author: Kaifur Rashed
 """
 import datetime
 import time
