@@ -1,130 +1,735 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Sep 22 13:58:23 2023
+Created on Tue Oct  3 15:18:10 2023
 
-@author: Kaifur Rashed
+@author: E86586
+
+
+Plan is to take in a TDM file, convert the altitude-azimuth to RA and Dec, and then go Gauss' method to do an initial orbit, then putting that into a TLE... 
+I'm going to be stitching together code from Kaifur Rashed as well as stuff from Curtis (particularly the OD part), as well as some astropy conversion stuff
+from Adam at Swinburne
+
 """
 
 import os
 import numpy as np
-from scipy.optimize import minimize
+#from scipy.optimize import minimize
 import datetime
+from datetime import timedelta
+import pandas as pd
+import re
+from astropy.coordinates import EarthLocation,SkyCoord
+from astropy.time import Time
+from astropy import units as u
+from astropy.coordinates import AltAz
 
-# Constants
-mu = 398600.4418  # Standard gravitational parameter for Earth in km^3/s^2
+from math import *
 
-def parse_tdm_file(tdm_file):
-    observation_data = []
-    data_started = False
-    with open(tdm_file, 'r') as file:
-        for line in file:
-            line = line.strip()
-            if line == "DATA_START":
-                data_started = True
-                continue
-            elif line == "DATA_STOP":
-                break
-            if data_started:
-                if line.startswith("TIME ="):
-                    timestamp_str = line.split("=")[1].strip()  # Extract timestamp string
-                    try:
-                        timestamp = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-                    except ValueError:
-                        print(f"Skipping line: {line}")
-                        continue
-                elif line.startswith("ANGLE_1 ="):
-                    azimuth = float(line.split("=")[1].strip())
-                elif line.startswith("ANGLE_2 ="):
-                    elevation = float(line.split("=")[1].strip())
-                    observation_data.append((timestamp, azimuth, elevation))
-    return np.array(observation_data)
 
-# Function to calculate residuals (sum of squares of differences between observed and computed azimuth and elevation)
-def residuals(tle_elements, data):
-    residuals = []
 
-    for timestamp, azimuth_observed, elevation_observed in data:
-        x, y, z = calculate_position_vector(tle_elements, timestamp.timestamp())
-        r = np.sqrt(x**2 + y**2 + z**2)
-        theta = np.arctan2(y, x)
-        phi = np.arctan2(z, np.sqrt(x**2 + y**2))
-        az_predicted = theta
-        el_predicted = np.pi / 2 - phi
-        residuals.extend([(az_predicted - azimuth_observed)**2, (el_predicted - elevation_observed)**2])
+def sidereal_lt(year,month,day,hour,mins,secs,long):
+    
+    
+    #first, work out sidereal time
+    #we need to work out J0 from year, month and day (see algorythm 5.3, page 252)
+    #equation 5.48
 
-    return np.sum(residuals)
+    #following example 5.6
+    #equation 5.48
+    J0 = (367 * year) - floor(7 * (year + floor((month + 9) / 12)) / 4) + floor(275 * month / 9) + day + 1721013.5
+    
+    #Eq 5.49
+    T0 = (J0 - 2451545) / 36525
 
-# Function to calculate position vector from TLE elements
-def calculate_position_vector(tle_elements, t):
-    a, e, i, Omega, omega, E0, M0 = tle_elements
-    n = np.sqrt(mu / a**3)
-    M = M0 + n * t
-    E = calculate_eccentric_anomaly(M, e)
-    nu = 2 * np.arctan2(np.sqrt(1 + e) * np.sin(E / 2), np.sqrt(1 - e) * np.cos(E / 2))
-    r = a * (1 - e * np.cos(E))
-    x = r * (np.cos(Omega) * np.cos(omega + nu) - np.sin(Omega) * np.sin(omega + nu) * np.cos(i))
-    y = r * (np.sin(Omega) * np.cos(omega + nu) + np.cos(Omega) * np.sin(omega + nu) * np.cos(i))
-    z = r * (np.sin(omega + nu) * np.sin(i))
-    return x, y, z
+    #Greenwich sidereal time at 0 UT
+    theta_G0 = 100.4606184 + (36000.77004 * T0) + (0.000387933 * T0**2) - (2.583E-8 * T0**3)    
+    theta_G0 = zero_to_360(theta_G0)
+    
+    ut = hour + (mins/60) + (secs/3600)
+    
+    #Greenwich sidereal time at UT
+    theta_G = theta_G0 + (360.98564724*ut/24);
+        
+    #This is the local sidereal time, adding the longitude onto the Greenwich sidereal time angle
+    theta = theta_G + long
+        
+    #for when the angle lies outside of 0 - 360 deg
+    theta = zero_to_360(theta)
+        
+    return(theta)
 
-def calculate_eccentric_anomaly(M, e):
-    f = lambda E: E - e * np.sin(E) - M
-    E0 = M
-    eccentric_anomaly = minimize(f, E0).x[0]
-    return eccentric_anomaly
+
+
+def zero_to_360(x):
+    
+    #floor = math.floor
+    
+    if x >= 360:
+        x = x - (floor(x/360)*360)
+    
+    if x < 0:
+        x = x - ((floor(x/360)-1)*360)
+    
+    return(x)
+
+
+def kepler_U(dt, ro, vro, a):
+    
+    mu = 398600
+    error = 1e-6
+    nMax = 1000
+    
+    x = sqrt(mu) * np.absolute(a) * dt
+    #print(x)
+    #print(a)
+    #input("key")
+    
+    #Iterating on equation 3.65 until convergence is achieved
+    n = 0
+    ratio = 1
+    
+    while np.absolute(ratio) > error and n <= nMax:
+        n += 1
+        
+        #print(a * x**2)
+        
+        C = stumpC(a * x**2)
+        S = stumpS(a * x**2)
+        
+        #print(C)
+        #print(S)
+        
+        F = ro * vro/sqrt(mu) * x**2 * C + (1 - a * ro) * x**3 * S + ro * x - sqrt(mu) * dt
+        dFdx = ro * vro/sqrt(mu) * x * (1 - a * x**2 *S) + (1 - a*ro) * x**2 *C + ro
+        
+        #Brett's previous formulas (doesn't really seem to matter now that StumpC and StumpS are fixed)
+        #F = (ro * vro/sqrt(mu) * x**2 * C) + ((1 - a * ro) * x**3 * S) + (ro * x) - (sqrt(mu) * dt)
+        #dFdx = (ro * vro/sqrt(mu) * x * (1 - a * x**2 *S)) + ((1 - a*ro) * x**2 *C) + ro
+        
+        ratio = F/dFdx
+        x = x - ratio
+        
+        #print(x,n)
+    
+    return(x)
+    
+def stumpC(z):
+    #This function evaluates the Stumpff function C(z) from Equation 3.53
+    
+    if z > 0:
+        c = (1 - cos(sqrt(z)))/z
+    
+    if z < 0:
+        c = (cosh(sqrt(-z)) - 1)/(-z)
+    
+    if z == 0:
+        c = 1/2
+    
+    return(c)
+    
+def stumpS(z):
+    #This function evaluates the Stumpff function S(z) from Equation 3.52
+    
+    if z > 0:
+        s = (sqrt(z) - sin(sqrt(z)))/(sqrt(z))**3
+    
+    if z < 0:
+        s = (sinh(sqrt(-z)) - sqrt(-z))/(sqrt(-z))**3
+    
+    if z == 0:
+        s = 1/6
+    
+    return(s)
+
+def f_and_g(x, t, ro, a):
+    
+    #Calculates the Lagrange f and g coefficients
+    
+    mu = 398600
+    
+    z = a * x**2
+    
+    #Equation 3.69a
+    f = 1 - x**2 / ro * stumpC(z);
+    
+    #Equation 3.69b
+    g = t - 1 / sqrt(mu) * x**3 * stumpS(z)
+    
+    return(f,g)
+
+  
+def rv_2_kep(r,v):
+
+    #sqrt = math.sqrt
+    #acos = math.acos
+    #pi = math.pi
+
+    mu = 398600
+
+    #Step 1, work out r
+    r_mag = sqrt(r[0]**2 + r[1]**2 + r[2]**2)
+    
+    #Step 2, work out the speed
+    v_mag = sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+
+    #Step 3 work out radial velocity
+    v_r = ((r[0] * v[0])+(r[1] * v[1])+(r[2] * v[2]))/r_mag
+
+    #Step 4, work out specific angular momentum; h = r x v
+
+    h_x = (r[1] * v[2]) - (v[1] * r[2])
+    h_y = -((r[0]*v[2])-(v[0]*r[2]))
+    h_z = ((r[0]*v[1])-(v[0]*r[1]))
+
+    h = [h_x, h_y, h_z]
+
+
+    #Step 5, calculate magnitude of h
+    h_mag = sqrt(h[0]**2 + h[1]**2 + h[2]**2)
+
+    #Step 6, calculate inclination (degrees)
+    i = acos(h_z/h_mag) * (180/pi)
+
+
+    #Step 7, calculate Node line vector, N = k x h
+    N_x = -1 * h_y
+    N_y = h_x
+    N_z = 0
+
+    N = [N_x, N_y, N_z]
+
+    #Step 8, magnitude of N
+    N_mag = sqrt(N[0]**2 + N[1]**2 + N[2]**2)
+
+    #Step 9, calculate Right Ascension (in degrees)
+    if N_y >= 0:
+        Omega = acos(N_x/N_mag)*180/pi
+    else:
+        Omega = 360 - (acos(N_x/N_mag)*180/pi)
+
+    #Step 10, calculate eccentricity vector e
+    coeff1 = (v_mag**2 - (mu / r_mag))
+    coeff2 = r_mag * v_r
+
+    e_vec = (1 / mu) * ((coeff1 * r) - (coeff2 * v))
+
+    #Step 11, calculate eccentricity 
+    e = sqrt(e_vec[0]**2 + e_vec[1]**2 + e_vec[2]**2)
+
+
+    #Step 12, calculate argument of perigee
+
+    N_dot_e = (N[0] * e_vec[0]) + (N[1] * e_vec[1]) + (N[2] * e_vec[2])
+    N_e = N_mag * e
+
+    if e_vec[2] >= 0:
+        omega = acos(N_dot_e / N_e) * (180 / pi)
+    else:
+        omega = 360 - acos(N_dot_e / N_e) * (180 / pi)
+    
+    #Step 13, calculate true anomaly
+    e_dot_r = (e_vec[0] * r[0]) +(e_vec[1] * r[1]) + (e_vec[2] * r[2])
+    e_r = e * r_mag
+
+    if v_r >= 0:
+        theta = acos(e_dot_r/e_r) * (180 / pi)
+    else:
+        theta = 360 - acos(e_dot_r/e_r) * (180 / pi)
+    
+    
+    return(h_mag, i, Omega, e, omega, theta)  
+
 
 # Specify the folder where the TDM files are located
-tdm_folder = 'C:/Scratch/35756tdm/'
+tdm_folder = 'C:/Scratch/TDM_test/'
+
+Object_name = 'TARGET'
+#Object_name = 'CHASER'
 
 # Get a list of all TDM files in the folder
-tdm_file = [file for file in os.listdir(tdm_folder) if file.endswith('.tdm.txt')]
+tdm_file = [file for file in os.listdir(tdm_folder) if file.endswith('.tdm')][5]
 
 # Specify the folder where the TLE files will be saved
 tle_output_folder = 'C:/Scratch/TLE/'
 
-# Create the output folder if it doesn't exist
-if not os.path.exists(tle_output_folder):
-    os.makedirs(tle_output_folder)
 
-# Process each TDM file and generate corresponding TLE
-for tdm_file_name in tdm_file:
-    # Load observation data from the TDM file
-    tdm_file_path = os.path.join(tdm_folder, tdm_file_name)
-    observation_data = parse_tdm_file(tdm_file_path)  # Pass the tdm_file_path as an argument
 
-    # Check if there is at least one data point in the observation_data list
-    if len(observation_data) > 0:
-        # Initial guess for TLE elements (semi-major axis, eccentricity, inclination, RAAN, argument of perigee, mean anomaly)
-        tle_elements_guess = [7000, 0.001, np.radians(45), np.radians(90), np.radians(90), np.radians(0), np.radians(0)]
+station_loc = [-37.680589141, 145.061634327, 0.155083]
 
-        # Perform Gauss method optimization to determine TLE elements
-        result = minimize(residuals, tle_elements_guess, args=(observation_data,), method='Nelder-Mead')
+station_loc = [-27.680589141, 145.061634327, 0.155083]
 
-        # Extract the optimized TLE elements
-        optimized_tle_elements = result.x
 
-        # Generate the TLE string
-        line1 = "1 99999U 00000A   21100.00000000  .00000000  00000-0  00000-0 0  0001"
-        line2 = "2 99999 {} 000.0000  00.0000 0000000  00.0000 000.0000 15  0001".format(
-            int(optimized_tle_elements[0]),
-            round(optimized_tle_elements[1], 7),
-            round(np.degrees(optimized_tle_elements[2]), 4),
-            round(np.degrees(optimized_tle_elements[3]), 4),
-            round(np.degrees(optimized_tle_elements[4]), 4),
-            round(np.degrees(optimized_tle_elements[5]), 4),
-            int(observation_data[0][0].timestamp()))
+time_list = []
+elevation_list = []
+azimuth_list = []
+data_started = False
+with open(tdm_folder+tdm_file, 'r') as file:
+    for line in file:
+        line = line.strip()
+        if line == "DATA_START":
+            data_started = True
+            continue
+        elif line == "DATA_STOP":
+            break
+        if data_started:
+            if line.startswith("ANGLE_1 ="):
+                
+                line_split = line.split()
+                azimuth = float(line_split[3])
+                
+                azimuth_list.append(azimuth)
+                    
+                time = line_split[2]
+                timestamp = datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S.%fZ")
+                
+                time_list.append(timestamp)
+                    
+            elif line.startswith("ANGLE_2 ="):
+                
+                line_split_2 = line.split()
+                
+                elevation = float(line_split_2[3])
+                
+                elevation_list.append(elevation)
+                
+col_names = ["time", "azimuth", "elevation"]
+list_of_tuples = list(zip(time_list, azimuth_list, elevation_list))
+df = pd.DataFrame(list_of_tuples,columns=col_names)
 
-        # Determine the TLE file name with "_TLE" added
-        tle_file_name = os.path.splitext(tdm_file_name)[0] + '_TLE.dat'
+#now we need to work out the RA and DEC for each of these...
 
-        # Create the full path for the TLE file
-        tle_file_path = os.path.join(tle_output_folder, tle_file_name)
+ras = []
+decs = []
+t = []
+sid_t = []
 
-        # Save the TLE to a .dat file
-        with open(tle_file_path, 'w') as tle_file:
-            tle_file.write(line1 + '\n')
-            tle_file.write(line2 + '\n')
+for index,itime in enumerate(df.time):
+    
+    
+    #defining the first time stamp of the observation run, for the OD
+    if index == 0:
+        t_0 = itime
+    
+    delta_t = itime - t_0
+    t.append(delta_t.seconds)
 
-        print("Optimized TLE elements saved to", tle_file_path)
+
+    alt = df.elevation.iloc[index]
+    az = df.azimuth.iloc[index]
+
+    t1 = Time(itime, format='datetime',scale='utc')
+
+    location = EarthLocation(lat=station_loc[0]*u.deg,
+                             lon = station_loc[1]*u.deg,
+                             height = station_loc[2]*u.km)
+    altazframe = AltAz(obstime = t1, location = location)
+    coord = SkyCoord(alt = alt*u.deg, az = az*u.deg, frame = altazframe)
+    coord_icrs = coord.transform_to('icrs')
+    
+    ras.append(coord_icrs.ra.deg)
+    decs.append(coord_icrs.dec.deg)
+    
+    sdt = sidereal_lt(itime.year,itime.month,itime.day,itime.hour,itime.minute,itime.second,station_loc[1])
+    
+    sid_t.append(sdt)
+
+    #print("Right Ascension (α):", ra)
+    #print("Declination (δ):", dec)
+
+df["RA"] = ras
+df["Dec"] = decs
+df["t"] = t
+df["sidereal_time"] = sid_t
+
+
+#Now that's all done... time to do the OD!! Gauss' method for now...
+
+#site information
+# latitude = 40
+# H = 1
+
+# #observation set (Time, RA, Dec, local sidereal time)
+# obs_1 = np.array([0, 43.5365, -8.78334, 44.5065])
+# obs_2 = np.array([118.104, 54.4196, -12.0739, 45.0])
+# obs_3 = np.array([237.577, 64.3178, -15.1054, 45.4992])
+
+latitude = station_loc[0]
+H = station_loc[2]/1000
+
+#taking the first, and last points, and the point that's close to half way
+obs_indicies = [0,floor((len(df.index)-1)/2),len(df.index)-1]
+
+obs_1 = np.array([df.t.iloc[obs_indicies[0]],  df.RA.iloc[obs_indicies[0]], df.Dec.iloc[obs_indicies[0]] , df.sidereal_time.iloc[obs_indicies[0]]])
+obs_2 = np.array([df.t.iloc[obs_indicies[1]],  df.RA.iloc[obs_indicies[1]], df.Dec.iloc[obs_indicies[1]] , df.sidereal_time.iloc[obs_indicies[1]]])
+obs_3 = np.array([df.t.iloc[obs_indicies[2]],  df.RA.iloc[obs_indicies[2]], df.Dec.iloc[obs_indicies[2]] , df.sidereal_time.iloc[obs_indicies[2]]])
+
+observations = [obs_1, obs_2, obs_3]
+
+print(observations)
+
+mu = 398600     #Earth gravitational parameter
+Re = 6378       #Earth Radius
+f = 1/298.26    #flattening factor
+
+
+#R_obs = []  #inertial observation position vector
+#rhohat = []    #direction of observation vector rho
+count = 0
+
+for i in observations:
+
+    theta = np.float64(i[3]*pi/180)
+    
+    phi = np.float64(latitude*pi/180)
+
+    #Equation 5.56 (accounting for Earth's oblateness)
+    coeff1 = np.float64((Re / (sqrt(1 - (2*f - f**2) * (sin(phi))**2))) + H)
+    coeff2 = np.float64(((Re * (1 - f)**2)/ (sqrt(1 - (2*f - f**2) * (sin(phi))**2))) + H)
+    
+    Rx_obs = coeff1 * cos(phi) * cos(theta)
+    Ry_obs = coeff1 * cos(phi) * sin(theta)
+    Rz_obs = coeff2 * sin(phi)
+
+    #The inertial position vectors of the observer
+    if count == 0:
+        R_obs = np.array([Rx_obs,Ry_obs,Rz_obs])
     else:
-        print(f"No observation data found in {tdm_file_name}. Skipping.")
+        R_obs = np.vstack((R_obs, [Rx_obs, Ry_obs, Rz_obs]))
+        
+    #R_obs.append([Rx_obs, Ry_obs, Rz_obs])
+
+    
+    #Computing the direction cosine vectors for each observation
+    alpha = np.float64(i[1]*pi/180)
+    delta = np.float64(i[2]*pi/180)
+    
+    rho_x = np.float64(cos(delta)*cos(alpha))
+    rho_y = np.float64(cos(delta)*sin(alpha))
+    rho_z = np.float64(sin(delta))
+    
+    if count == 0:
+        rhohat = np.array([rho_x,rho_y,rho_z])
+    else:
+        rhohat = np.vstack((rhohat, [rho_x,rho_y,rho_z]))
+    
+    #rhohat.append([rho_x,rho_y,rho_z])
+    
+    count += 1
+    
+
+
+#time intervals
+tau_1 = obs_1[0] - obs_2[0]
+tau_3 = obs_3[0] - obs_2[0]
+tau = tau_3 - tau_1
+
+
+#calculate cross products p1, p2 and p3, then D values
+p1 = np.cross(rhohat[1],rhohat[2])
+p2 = np.cross(rhohat[0],rhohat[2])
+p3 = np.cross(rhohat[0],rhohat[1])
+
+D0 = np.dot(rhohat[0],p1)
+
+D11 = np.dot(R_obs[0],p1)
+D12 = np.dot(R_obs[0],p2)
+D13 = np.dot(R_obs[0],p3)
+
+D21 = np.dot(R_obs[1],p1)
+D22 = np.dot(R_obs[1],p2)
+D23 = np.dot(R_obs[1],p3)
+
+D31 = np.dot(R_obs[2],p1)
+D32 = np.dot(R_obs[2],p2)
+D33 = np.dot(R_obs[2],p3)
+
+
+#Calculating A and B
+#Eq. 5.112b
+A = 1/D0 * (D22 - (D12*tau_3/tau) + (D32*tau_1/tau))
+#Eq. 5.112c
+B = (1/(6*D0)) * (((D12*tau_3/tau)*(tau_3**2-tau**2)) + ((D32*tau_1/tau)*(tau**2-tau_1**2)))
+
+#Calculating E, Eq. 5.115b
+E = np.dot(R_obs[1],rhohat[1])
+
+#Calculating R2^2,
+R2_sqr = np.dot(R_obs[1],R_obs[1])
+
+
+#Calculating a, b and c, Eq. 5.117
+a = -(A**2 + (2*A*E) + R2_sqr)
+b = -2 * mu * B * (A + E)
+c = -(mu * B)**2
+
+#Now we have to solve the 8th order polynomial
+s = np.poly1d([1, 0, a, 0, 0, b, 0, 0, c])
+
+routes = np.roots(s)
+
+#now to check all of the routes, exlcuding negative values and complex values
+for i in routes:
+    if i > 0:
+        if i.imag == 0:
+            x = i.real
+
+#Now calculating rho1, rho2 and rho3 (the ranges for each measurement)
+
+#Eq 5.113
+rho1 = (1/D0) * ((6*x**3 * ((D31*tau_1/tau_3)+(D21*tau/tau_3)) + mu*D31*tau_1/tau_3*(tau**2 - tau_1**2))/((6 * x**3) + mu*(tau**2 - tau_3**2)) - D11)
+
+#Eq 5.112
+rho2 = mu*B/x**3 + A
+
+#Eq 5.114
+rho3 = (1/D0) * ((6*x**3 * ((D13*tau_3/tau_1) - (D23*tau/tau_1)) + mu*D13*tau_3/tau_1*(tau**2 - tau_3**2))/((6 * x**3) + mu*(tau**2 - tau_1**2)) - D33)
+
+#Now working out position vectors for each of the three measurements
+#Eq 5.86
+r1 = R_obs[0] + (rho1*rhohat[0])
+
+#Eq 5.87
+r2 = R_obs[1] + (rho2*rhohat[1])
+
+#Eq 5.88
+r3 = R_obs[2] + (rho3*rhohat[2])
+
+#Now moving onto Lagrange coefficients f1, g1, f3 and g3 in Eqs 5.99 and 5.100
+
+
+#my versions of these formula are slightly different, down to about 6 sig figs...
+#f1 = 1 - (mu * tau_1**2/(2 * x**3))
+#f3 = 1 - (mu * tau_3**2/(2 * x**3))
+
+#Julie's version 
+#f1 = 1-((0.5*(mu/(x**3))*(tau_1**2)))
+
+#Matlab version of these formulas (doesn't really seem to matter now that StumpC and StumpS are fixed)
+f1 = 1 - 1/2*mu*tau_1**2/x**3
+f3 = 1 - 1/2*mu*tau_3**2/x**3
+
+#Same deal with my versions of these formulas, these are wrong apparently!
+#g1 = tau_1 - (mu * tau_1**3/(6 * x**3))
+#g3 = tau_3 - (mu * tau_3**3/(6 * x**3))
+
+#Matlab version
+g1 = tau_1 - 1/6*mu*(tau_1/x)**3
+g3 = tau_3 - 1/6*mu*(tau_3/x)**3
+
+#Finally, now calculating v2
+v2 = 1/(f1*g3 - f3*g1) * (-f3 * r1 + f1 *r3)
+
+r2_old = r2
+v2_old = v2
+
+print("State vector without improvement iterations:")    
+
+print("r:", r2)
+print("v" ,v2)
+
+
+#Now, starting Algorithm 5.6 to improve the vectors to a tolerance of 1e-8
+
+#initialisation
+rho1_old, rho2_old, rho3_old = rho1, rho2, rho3
+diff1, diff2, diff3, n, nmax, toler  = 1, 1, 1, 0, 1000, 1e-8
+
+#sys.exit()
+
+while diff1 > toler and diff2 > toler and diff3 > toler:
+    n += 1
+    
+    #Calculating values for Kepler's equations
+    r_mag = np.linalg.norm(r2)
+    v_mag = np.linalg.norm(v2)
+    vro = np.dot(v2,r2)/r_mag
+    alpha = (2/r_mag)- (v_mag**2/mu)
+    
+    
+    #Now we must work out the Universal Kepler equation, iteratively using Newton's method
+    x1 = kepler_U(tau_1, r_mag, vro, alpha)
+    x3 = kepler_U(tau_3, r_mag, vro, alpha)
+    
+    
+    ff1, gg1 = f_and_g(x1, tau_1, r_mag, alpha)
+    ff3, gg3 = f_and_g(x3, tau_3, r_mag, alpha)
+
+    
+    #updating f and g functions at tau and tau3, averaging new and old
+    f1 = (f1 + ff1)/2
+    f3 = (f3 + ff3)/2
+    g1 = (g1 + gg1)/2
+    g3 = (g3 + gg3)/2
+    
+    #Equations 5.96 and 5.97
+    c1 = g3 / (f1*g3 - f3*g1)
+    c3 = -g1 / (f1*g3 - f3*g1)
+    
+    
+    #Equations 5.109a, 5.110a and 5.11a
+    rho1 = 1/D0 * (-D11 + (D21/c1) - (c3*D31/c1))
+    rho2 = 1/D0 * (-c1 * D12 + D22 - (c3*D32))
+    rho3 = 1/D0 * (-c1*D13/c3 + (D23/c3) - D33)
+        
+    
+    #Equations 5.86
+    r1 = R_obs[0] + (rho1 * rhohat[0])
+    r2 = R_obs[1] + (rho2 * rhohat[1])
+    r3 = R_obs[2] + (rho3 * rhohat[2])
+    
+    #Equation 5.118
+    v2 = ((-f3*r1) + (f1*r3)) / ((f1 * g3) - (f3*g1))
+    
+    #Calculating differences in order to form convergence
+    diff1 = np.absolute(rho1 - rho1_old)
+    diff2 = np.absolute(rho2 - rho2_old)
+    diff3 = np.absolute(rho3 - rho3_old)
+    
+    #Updating slant ranges
+    rho1_old, rho2_old, rho3_old = rho1, rho2, rho3
+    
+    if n >= nmax:
+        break
+    
+print("Number of iteractions needed: ",n)
+
+if n >= nmax:
+    print("Number of iterations exceeded maximum of: ",nmax)
+    
+print("Final state vector following improvement iterations")    
+print("r" ,r2)
+print("v" ,v2)
+
+###################################################################################
+###################################################################################
+
+#now, to convert that state vector to Keplerian elements that will form the TLE
+h, i, Omega, e, omega, theta = rv_2_kep(r2,v2)
+
+print("Input state vector: ")
+print("r: ", r2)
+print("v: ", v2)
+
+print("==================================")
+
+print("Specific angular momentum (km^2/s): ", h)
+print("Inclination (deg): ", i)
+print("Right Ascension of Ascending Node (deg): ", Omega)
+print("Eccentricity: ", e)
+print("Argument of Perigee (deg): ", omega)
+print("True anomaly (deg): ", theta)
+
+###################################################################################
+###################################################################################
+
+#Now writing the results to a TLE file
+
+#tle_elements_guess = [7000, 0.001, np.radians(45), np.radians(90), np.radians(90), np.radians(0), np.radians(0)]
+
+# Perform Gauss method optimization to determine TLE elements
+#result = minimize(residuals, tle_elements_guess, args=(observation_data,), method='Nelder-Mead')
+
+# Extract the optimized TLE elements
+#optimized_tle_elements = result.x
+
+two_digit_year = str(itime.strftime("%y"))
+
+start_of_year = datetime.datetime(itime.year, 1, 1, 0, 0)
+doy = (itime - start_of_year) / timedelta(1)
+
+#getting mean anomaly from true anomaly
+def true_to_mean_anomaly(TA, e):
+    # Convert degrees to radians
+    TA_rad = radians(TA)
+
+    # Calculate eccentric anomaly (EA)
+    EA = 2 * atan2(sqrt(1 - e) * sin(TA_rad / 2), sqrt(1 + e) * cos(TA_rad / 2))
+
+    # Calculate mean anomaly (MA)
+    MA = EA - e * sin(EA)
+
+    # Convert radians to degrees
+    MA_deg = degrees(MA)
+
+    # Normalize mean anomaly to range between 0 and 360 degrees
+    MA_normalized = (MA_deg + 360) % 360
+
+    return MA_normalized
+
+
+# Example usage
+true_anomaly = theta     # Example true anomaly in degrees
+eccentricity = e     # Example eccentricity
+
+mean_anomaly = true_to_mean_anomaly(true_anomaly, eccentricity)
+print(f"Mean Anomaly: {mean_anomaly} degrees")
+
+
+#Now the mean motion
+mean_motion_rad_per_s = sqrt(mu / h**3)
+#Revolutions per day
+mean_motion = (86400 / (2 * pi)) * mean_motion_rad_per_s
+
+
+# Generate the TLE string
+
+def format_tle_line(line):
+    return line.rstrip()
+
+def format_tle(epoch, line1, line2, eccentricity, inclination, raan, arg_perigee, mean_anomaly, mean_motion, name):
+    #epoch = epoch.strftime("%y%j.%S")
+    
+    YY = epoch.strftime("%y")
+    
+    startofthisyear = datetime.datetime(epoch.year,1,1)
+    
+    day_num = epoch.strftime("%j")
+    
+    DOY = float(day_num) + (epoch.hour/24.) + (epoch.minute/(24*60.)) + (epoch.second/(24*60*60))
+    
+    DOY = f"{DOY:.8f}"
+    
+    #{line1[len(line1)-1]}
+    
+    line1 = format_tle_line(line1)
+    line2 = format_tle_line(line2)
+    eccentricity = f'{eccentricity:.7f}'.lstrip('0.')
+    return f"{name}\n1 99999U 00000A   {YY}{DOY}  .00000000  00000-0  00000-0 0  0001\n2 99999 {inclination:8.4f} {raan:8.4f} {eccentricity} {arg_perigee:8.4f} {mean_anomaly:8.4f} {mean_motion:10.7f}0000101"
+
+# Example orbital elements
+epoch = itime
+line1 = "1 99999U 00000A   00000.00000000  .00000000  00000-0  00000-0 0  0001"
+line2 = "2 99999  00.0000  00.0000 0000000  00.0000 000.0000 00.00000000000000"
+
+#eccentricity = 0.0004894      # Example eccentricity
+#inclination = 51.6427        # Example inclination
+#raan = 43.8078               # Example right ascension of the ascending node
+#arg_perigee = 99.5810        # Example argument of perigee
+#mean_anomaly = 260.5466      # Example mean anomaly
+#mean_motion = 15.4883468     # Example mean motion
+
+formatted_tle = format_tle(epoch, line1, line2, e, i, Omega, omega, mean_anomaly, mean_motion,Object_name)
+print(formatted_tle)
+
+
+
+
+
+# Determine the TLE file name with "_TLE" added
+tle_file_name = os.path.splitext(tdm_file)[0] + '_TLE.dat'
+
+# Create the full path for the TLE file
+tle_file_path = os.path.join(tle_output_folder, tle_file_name)
+
+# Save the TLE to a .dat file
+with open(tle_file_path, 'w') as tle_file:
+    tle_file.write(formatted_tle)
+    #tle_file.write(line2 + '\n')
+
+print("TLE elements saved to", tle_file_path)
+
+
+
+
+
+
