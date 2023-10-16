@@ -1,0 +1,24 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May 16 17:09:13 2019
+
+@authors: 
+Brett Carter, SPACE Research Centre, School of Science, RMIT University, brett.carter@rmit.edu.au
+Erik Klein, IRAS Institute of Space Systems, Braunschweig, Germany, erik.klein@tu-bs.de
+This code was developed as part of RMIT University's Robotic Optical Observatory (ROO) project.
+
+"""
+
+
+import win32com.client
+
+
+command = "Card_Power_On"
+    
+#actual ASCOM dome object
+domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
+
+#assigning True value (creating a 2nd instance of ScopeDomeLS??)
+#domeObj.Connected = True
+
+domeObj.CommandString(command)
