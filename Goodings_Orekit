@@ -1,0 +1,112 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct 12 10:50:32 2023
+
+This code uses the orekit library to perform IOD using different methods.. It still needs some work
+
+@author: Kaifur Rashed
+
+"""
+
+from org.orekit.data import DataProvidersManager, ZipJarCrawler
+from org.orekit.estimation import PVData
+from org.orekit.estimation.measurements import AngularAzEl
+from org.orekit.estimation.measurements import ObservableSatellite, AngularRaDec
+from org.orekit.frames import FramesFactory, TopocentricFrame
+from org.orekit.models.earth.atmosphere import HarrisPriester
+from org.orekit.utils import Constants, IERSConventions
+from org.orekit.estimation.measurements import GroundStation
+from org.orekit.estimation.leastsquares import BatchLSEstimator
+from org.orekit.models.earth import ReferenceEllipsoid
+from org.orekit.propagation import Propagator
+from org.orekit.propagation.analytical import EcksteinHechlerPropagator
+from org.orekit.propagation.conversion import TLEConverter
+from org.orekit.time import AbsoluteDate, TimeScalesFactory
+from org.orekit.utils import IERSConventions, Constants
+from org.orekit.utils.pyhelpers import setup_orekit_curdir
+from org.orekit.frames import LOFType, FactoryManagedFrame
+
+def test_forum():
+    setup_orekit_curdir()
+    
+    ECI = FramesFactory.getEME2000()
+    mu = Constants.WGS84_EARTH_MU
+    LAT = math.radians(43.05722)
+    LON = math.radians(76.971667)
+    ALT = 2735.0
+    t1 = AbsoluteDate(2023, 6, 9, 17, 4, 59.10, TimeScalesFactory.getUTC())
+    t2 = AbsoluteDate(2023, 6, 9, 17, 10, 50.66, TimeScalesFactory.getUTC())
+    t3 = AbsoluteDate(2023, 6, 9, 17, 16, 21.09, TimeScalesFactory.getUTC())
+
+    RA = Vector3D(15. * (16. + 5. / 60. + 51.20 / 3600.),
+                  15. * (16. + 11. / 60. + 43.73 / 3600.),
+                  15. * (16. + 17. / 60. + 15.1 / 3600.))
+
+    DEC = Vector3D(-(6. + 31. / 60. + 44.22 / 3600.),
+                   -(6. + 31. / 60. + 52.36 / 3600.),
+                   -(6. + 32. / 60. + 0.03 / 3600.))
+
+    nRev = 0
+
+    ITRF = FramesFactory.getITRF(IERSConventions.IERS_2010, True)
+    earth = OneAxisEllipsoid(Constants.WGS84_EARTH_EQUATORIAL_RADIUS, Constants.WGS84_EARTH_FLATTENING, ITRF)
+    stationCoord = GeodeticPoint(LAT, LON, ALT)
+    stationFrame = TopocentricFrame(earth, stationCoord, "N42")
+    ground_station = GroundStation(stationFrame)
+
+    sat1 = ObservableSatellite(1)
+
+    angular1 = [math.radians(RA.getX()), math.radians(DEC.getX())]
+    angular2 = [math.radians(RA.getY()), math.radians(DEC.getY())]
+    angular3 = [math.radians(RA.getZ()), math.radians(DEC.getZ())]
+
+    sigma = [1.0, 1.0]
+    baseW = [1.0, 1.0]
+    raDec1 = AngularRaDec(ground_station, FramesFactory.getEME2000(), t1,
+                          angular1, sigma, baseW, sat1)
+    raDec2 = AngularRaDec(ground_station, FramesFactory.getEME2000(), t2,
+                          angular2, sigma, baseW, sat1)
+    raDec3 = AngularRaDec(ground_station, FramesFactory.getEME2000(), t3,
+                          angular3, sigma, baseW, sat1)
+
+    pos1 = stationFrame.getPVCoordinates(t1, ECI).getPosition()
+    pos2 = stationFrame.getPVCoordinates(t2, ECI).getPosition()
+    pos3 = stationFrame.getPVCoordinates(t3, ECI).getPosition()
+
+    posGauss1 = Vector3D(-2.0921302099117476E7, -3.6670713616811395E7, 34465.7831621021)
+    posGauss2 = Vector3D(-1.99735595868321E7, -3.719354402143339E7, 32965.932702185586)
+    posGauss3 = Vector3D(-1.90708500448641E7, -3.766276304220245E7, 31536.539604075253)
+
+    p1 = posGauss1.getNorm()
+    p3 = posGauss3.getNorm()
+    position1 = Position(t1, posGauss1, 1.0, 1.0, sat1)
+    position2 = Position(t2, posGauss2, 1.0, 1.0, sat1)
+    position3 = Position(t3, posGauss3, 1.0, 1.0, sat1)
+
+    iodGauss = IodGauss(mu, eme2000)
+    estimatedGauss = iodGauss.estimate(raDec1, raDec2, raDec3)
+    kepOrbitGauss = KeplerianOrbit(estimatedGauss)
+    print(kepOrbitGauss)
+
+    iodGibbs = IodGibbs(mu)
+    estimated_orbit_Gibbs = iodGibbs.estimate(ECI, position1, position2, position3)
+    kepOrbitGibbs = KeplerianOrbit(estimated_orbit_Gibbs)
+    print(kepOrbitGibbs)
+
+    iodGooding = IodGooding(mu, eme2000, p1, p3, 0, True)
+    estimated_orbit_Gooding = iodGooding.estimate(raDec1, raDec2, raDec3)
+    kepOrbitGooding = KeplerianOrbit(estimated_orbit_Gooding)
+    print(kepOrbitGooding)
+
+    iodLaplace = IodLaplace(mu, eme2000)
+    estimatedIodLaplace = iodLaplace.estimate(raDec1, raDec2, raDec3)
+    kepOrbitLaplace = KeplerianOrbit(estimatedIodLaplace)
+    print(kepOrbitLaplace)
+
+    iodLambert = IodLambert(mu)
+    estimatedIodLambert = iodLambert.estimate(eme2000, True, 0, position1, position2)
+    kepOrbitLambert = KeplerianOrbit(estimatedIodLambert)
+    print(kepOrbitLambert)
+
+if __name__ == "__main__":
+    test_forum()
