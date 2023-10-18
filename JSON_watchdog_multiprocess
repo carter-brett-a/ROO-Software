@@ -233,9 +233,11 @@ def get_coordinates_of_ROO_process(coord_folder):
     pythoncom.CoUninitialize()  # Uninitialize COM when done
 obs_process = multiprocessing.Process(target=process_scheduled_observations)
 obs_process.start()
+obs_process.join()
 stop_event = multiprocessing.Event()
-coords_process = multiprocessing.Process(target=get_coordinates_of_ROO_process, args=(coord_folder, stop_event))
+coords_process = multiprocessing.Process(target=get_coordinates_of_ROO_process)
 coords_process.start()
+coords_process.join()
 
 
 if __name__ == "__main__":
