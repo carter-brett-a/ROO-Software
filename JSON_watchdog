@@ -226,31 +226,35 @@ def get_coordinates_of_ROO_thread(teleobj, coord_folder):
 
         # Get RA and Dec coordinates
         teleobj.GetRaDec()
-        RaDecCoord = {
-            "Ra": teleobj.dRa,
-            "Dec": teleobj.dDec,
-            "Time": time.strftime('%Y-%m-%dT%H-%M-%S', current_time)
-        }
-        file_name = time.strftime('%Y-%m-%dT%H-%M-%S', current_time) + '.json'
-        RaDecCoord_file_path = os.path.join(coord_folder, f"RaDecCoord_{file_name}")
-        # Ensure the folder exists
-        os.makedirs(coord_folder, exist_ok=True)
-
-        with open(RaDecCoord_file_path, 'w') as RaDecCoord_file:
-            json.dump(RaDecCoord, RaDecCoord_file, indent=4)
-
         # Get Az and Alt coordinates
         teleobj.GetAzAlt()
-        AzAltCoord = {
+        Coord = {
+            "Ra": teleobj.dRa,
+            "Dec": teleobj.dDec,
             "Az": teleobj.dAz,
             "Alt": teleobj.dAlt,
             "Time": time.strftime('%Y-%m-%dT%H-%M-%S', current_time)
         }
         file_name = time.strftime('%Y-%m-%dT%H-%M-%S', current_time) + '.json'
-        AzAltCoord_file_path = os.path.join(coord_folder, f"AzAltCoord_{file_name}")
+        Coord_file_path = os.path.join(coord_folder, f"Coord_{file_name}")
+        # Ensure the folder exists
+        os.makedirs(coord_folder, exist_ok=True)
 
-        with open(AzAltCoord_file_path, 'w') as AzAltCoord_file:
-            json.dump(AzAltCoord, AzAltCoord_file, indent=4)
+        with open(Coord_file_path, 'w') as Coord_file:
+            json.dump(Coord, Coord_file, indent=4)
+
+        # Get Az and Alt coordinates
+        #teleobj.GetAzAlt()
+        #AzAltCoord = {
+           # "Az": teleobj.dAz,
+            #"Alt": teleobj.dAlt,
+            #"Time": time.strftime('%Y-%m-%dT%H-%M-%S', current_time)
+        #}
+        #file_name = time.strftime('%Y-%m-%dT%H-%M-%S', current_time) + '.json'
+        #AzAltCoord_file_path = os.path.join(coord_folder, f"AzAltCoord_{file_name}")
+
+        #with open(AzAltCoord_file_path, 'w') as AzAltCoord_file:
+            #json.dump(AzAltCoord, AzAltCoord_file, indent=4)
 
         time.sleep(60)  # Check every minute
     pythoncom.CoUninitialize()  # Uninitialize COM when done
