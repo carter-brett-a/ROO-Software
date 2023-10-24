@@ -2,16 +2,15 @@
 Created on Fri Oct 13 17:18:29 2023
 This code uses watchdog function to recognize new JSON files in a given folder. 
 It also has a thread running in the background which saves the location of the telescope in AzAlt and RaDec every minute into a JSON file.
-Needs debugging, currently unable to access json_folder - Error processing JSON file: [Errno 13] Permission denied: 'C:\\Telescope_Codes\\JSON'
+Needs debugging, currently able to access JSON folder and print "slewing to RA and Dec" but does not perform slew.
 
 @author: Kaifur Rashed
 """
 import datetime
 import time
 import json
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler
-from pathlib import Path
+import watchdog.observers
+import watchdog.events as we
 import win32com.client
 import os
 import threading
@@ -21,7 +20,7 @@ import pythoncom
 # Initialize COM
 pythoncom.CoInitialize()
 
-teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
 domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
 domeObj.Connected = True
@@ -32,214 +31,143 @@ coord_folder = "C:\Telescope_Codes\JSON\Coord"
 
 # Initialize a list for scheduled observations
 
-class TelescopeSlewHandler():
-    def __init__(self, json_folder):
-        self.teleobj = teleobj
-        self.domeobj = domeObj
+class TelescopeSlewHandler(we.PatternMatchingEventHandler):
+    def __init__(self):
+        we.PatternMatchingEventHandler.__init__(self, patterns=['*observation*.j*'], ignore_directories=True, case_sensitive=True)
+        self.teleObj = teleObj
+        self.domeObj = domeObj
         self.camObj = camObj
         self.json_folder = json_folder
         self.scheduled_observations = []
-        #self.process_telescope_slew()
-        #self.check_shutter_status_and_record_observation()
-        self.process_and_check_shutter()
-        self.perform_scheduled_observations()
-    def process_and_check_shutter(self):
-        observation = self.process_telescope_slew()
-        if observation is not None:
-            self.check_shutter_status_and_record_observation(observation)
-    def process_telescope_slew(self):
-        json_path = Path(self.json_folder)
+        #self.process_telescope_slew(json_file)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            print(f"New JSON file detected: {event.src_path}")
+            self.process_telescope_slew(event.src_path)
+            self.perform_scheduled_observations(event)
+
+    def process_telescope_slew(self, json_file):
+        pythoncom.CoInitialize()  # Initialize COM within the thread
         try:
-            with open(json_path, "r") as json_file:
-                data = json.load(json_file)
-                    # Process coordinates and slew_time here
+            with open(json_file, "r") as file:
+                data = json.load(file)
+
+            if "ra" in data and "dec" in data and "time" in data and "exposure time" in data and "sidereal tracking" in data:
+                # Process coordinates and slew_time here
                 target_ra = data["ra"]
                 target_dec = data["dec"]
                 target_time = data["time"]
                 exposure_time = data["exposure time"]
-                sidereal_tracking = data["sidereal tracking", 0] # Default value 0 if none given
-
-                if all([target_ra, target_dec, target_time]):
+                sidereal_tracking = data["sidereal tracking"] # Default value 0 if none given
+            
+                # You can use the values to control your telescope
+                if target_ra is not None and target_dec is not None and target_time is not None:
                     target_datetime = datetime.datetime.strptime(target_time, '%Y-%m-%dT%H:%M:%S')
-                            # Calculate the slewing time 5 minutes before the specified time
                     slewing_time = target_datetime - datetime.timedelta(minutes=5)
                     current_time = datetime.datetime.now()
 
-        # Check if it's time to add the observation to the scheduled list
-                    if current_time < slewing_time:
-                        return target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking
-            # Add the observation to the scheduled list
+                    if target_datetime > datetime.datetime.now() + datetime.timedelta(minutes=5):  # Check if the observation time is in the future
                         print(f"Scheduled observation for RA: {target_ra}, Dec: {target_dec} at {target_datetime}")
-                        #scheduled_observations.append((target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking))
+                        self.scheduled_observations.append((target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking))
                     else:
-                        print(f"Ignoring observation for RA: {target_ra}, Dec: {target_dec} at {target_datetime}, as time is in the past")
-                        #else:
-                            #print(f"Ignoring observation with past time: {target_time}")
+                        print(f"Ignoring observation with past time: {target_time}")
+        # Doing a shutter status check
+                        stat = self.domeObj.ShutterStatus
+                        if stat != 0:
+            # Record the observation as "Image not captured due to unsafe shutter status"
+                            observation_data = {
+                                "status": "unsafe_shutter",
+                                "target_ra": target_ra,
+                                "target_dec": target_dec,
+                                "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S')
+                            }
+                            file_name = current_time.strftime('%Y-%m-%dT%H-%M-%S') + 'output.json'
+                            observation_file_path = os.path.join(self.json_folder, file_name)
+                            with open(observation_file_path, 'w') as observation_file:
+                                json.dump(observation_data, observation_file, indent=4)
+                            print("Observation saved as unsafe due to shutter status")
+                        else:
+            # Wait for the specified time to slew
+                            #while datetime.datetime.now() <= target_datetime - datetime.timedelta(minutes=5):
+                                #pass
+                            print(f"Slewing to RA: {target_ra}, Dec: {target_dec} at {slewing_time}")
+                            self.teleObj.SlewToRaDec(target_ra, target_dec, 'Ra_%d_Dec_%d' % (target_ra, target_dec))
+                            while self.teleObj.IsSlewComplete != 1:
+                                pass
+                            print("Telescope is in position.")
+                            if sidereal_tracking == 1:
+                                self.teleObj.SetTracking(1, 0, 0, 0)
+                            else:
+                                self.teleObj.SetTracking(0, 1, 0, 0)
+            
+            # Check if the exposure time exceeds the maximum allowed (5 seconds)
+                            if float(exposure_time) <= 5.0:
+                # Set the camera exposure time
+                                self.camObj.ExposureTime = float(exposure_time)
+                            else:
+                # Exposure time exceeds the maximum allowed, record as "Exposure time exceeded"
+                                observation_data = {
+                                    "status": "exposure_time_exceeded",
+                                    "target_ra": target_ra,
+                                    "target_dec": target_dec,
+                                    "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
+                                    "exposure_time": exposure_time
+                                }
+                                file_name = current_time.strftime('%Y-%m-%dT%H-%M-%S') + 'output.json'
+                                observation_file_path = os.path.join(self.json_folder, file_name)
+                                with open(observation_file_path, 'w') as observation_file:
+                                    json.dump(observation_data, observation_file, indent=4)
+                                print(f"Exposure time {exposure_time} seconds exceeded")
+
+            # Wait for the specified time to capture an image
+                            while current_time < target_datetime:
+                                pass
+
+            # Capture 5 images and save them to the specified image folder
+                            for i in range(5):
+                # Capture an image
+                                print(f"Capturing image {i + 1} with exposure time {exposure_time} seconds...")
+                                self.camObj.TakeImage()
+
+                # Record the observation as "Image captured"
+                                observation_data = {
+                                    "status": "image_captured",
+                                    "target_ra": target_ra,
+                                    "target_dec": target_dec,
+                                    "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
+                                    "exposure_time": exposure_time
+                                }
+                                file_name = current_time.strftime('%Y-%m-%dT%H-%M-%S') + f'_image_{i}.json'
+                                observation_file_path = os.path.join(self.json_folder, file_name)
+                                with open(observation_file_path, 'w') as observation_file:
+                                    json.dump(observation_data, observation_file, indent=4)
+                                print(f"Image {i + 1} captured and saved")
+
 
         except Exception as e:
             print(f"Error processing JSON file: {str(e)}")
-        return None # Return none when no valid obs found
-    def check_shutter_status_and_record_observation(self, observation):
-        if observation is not None:
-            target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking = observation
-        json_path = Path(self.json_folder)
-        # Calculate slewing time 5 minutes before the specified time
-        target_datetime, observation = self.process_telescope_slew(self.scheduled_observations)
-        slewing_time = target_datetime - datetime.timedelta(minutes=5)
-        current_time = datetime.datetime.now()
-        
-        stat = self.domeObj.ShutterStatus
-        # Doing a shutter status check
-        # Shutter status (0 = open, 1 = closed, 2 = opening, 3 = closing, from trial and error)
-        if stat != 0:
-    # Record the observation as "Image not captured due to unsafe shutter status"
-            observation_data = {
-                "status": "unsafe_shutter",
-                "target_ra": target_ra,
-                "target_dec": target_dec,
-                "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S')
-                }
-            file_name = time.strftime('%Y-%m-%dT%H-%M-%S', current_time) + 'output.json'
-            observation_file_path = os.path.join(json_path, f"unsafe_shutter_{file_name}")
-            with open(observation_file_path, 'w') as observation_file:
-                json.dump(observation_data, observation_file, indent=4)
+            pythoncom.CoUninitialize()  # Uninitialize COM when done
 
-            print("Observation saved as unsafe due to shutter status.")
-        else:
-            # Wait for the specified time to slew - commented out as slewing time check already undertaken by the other subroutine
-            while datetime.datetime.now() <= slewing_time:
-                pass
-            print(f"Slewing to RA: {target_ra}, Dec: {target_dec} at {slewing_time}")
-            teleobj.SlewToRaDec(target_ra, target_dec, 'Ra_%d_Dec_%d' % (target_ra, target_dec))
-            while teleobj.IsSlewComplete != 1:
-                pass
-            print("Telescope is in position.")
-            if sidereal_tracking == 1:
-                teleobj.SetTracking(1,0,0,0)
-            else:
-                teleobj.SetTracking(0,1,0,0)
-            # Check if the exposure time exceeds the maximum allowed (5 seconds) - 
-            #Throwing error at the moment, recongizes exposure_time as string - I reckon I fixed it... we were sending this the file name
-            if exposure_time <= 5.0:
-                # Set the camera exposure time
-                camObj.ExposureTime = exposure_time
-            else:
-                # Exposure time exceeds the maximum allowed, record as "Exposure time exceeded"
-                observation_data = {
-                    "status": "exposure_time_exceeded",
-                    "target_ra": target_ra,
-                    "target_dec": target_dec,
-                    "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
-                    "exposure_time": exposure_time
-                }
-
-                observation_file_path = os.path.join(json_path, f"exposure_time_exceeded_{file_name}")
-                with open(observation_file_path, 'w') as observation_file:
-                    json.dump(observation_data, observation_file, indent=4)
-
-                print(f"Exposure time {exposure_time} seconds exceeded.")
-                
-   # Wait for the specified time to capture an image
-            while datetime.datetime.now() < target_datetime:
-               pass
- 
-        # Slew to the specified location
-        print(f"Slewing to RA: {target_ra}, Dec: {target_dec} at {slewing_time}")
-        teleobj.SlewToRaDec(target_ra, target_dec, 'Ra_%d_Dec_%d' % (target_ra, target_dec))
-        while teleobj.IsSlewComplete != 1:
-            pass
-        print("Telescope is in position.")
-            
-        # Wait for the specified time to capture an image
-        while datetime.datetime.now() < target_datetime:
-            pas
-            # Capture 5 images and save them to the specified image folder
-            for i in range(5):
-                # Capture an image
-                print(f"Capturing image {i + 1} with exposure time {exposure_time} seconds...")
-                camObj.TakeImage()
-
-                # Record the observation as "Image captured"
-                observation_data = {
-                    "status": "image_captured",
-                    "target_ra": target_ra,
-                    "target_dec": target_dec,
-                    "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
-                    "exposure_time": exposure_time
-                }
-
-                observation_file_path = os.path.join(json_path, f"image_captured_{file_name}_image_{i}.json")
-                with open(observation_file_path, 'w') as observation_file:
-                    json.dump(observation_data, observation_file, indent=4)
-
-                print(f"Image {i + 1} captured and saved.")
-
-    # Create a function to perform scheduled observations
-    def perform_scheduled_observations(self):
+    def perform_scheduled_observations(self, event):
         #while True:
         current_time = datetime.datetime.now()
         executed_observations = []
            
         for observation in self.scheduled_observations:
-            target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking, file_name = observation
+            target_datetime, target_ra, target_dec, exposure_time, sidereal_tracking = observation
             slewing_time = target_datetime - datetime.timedelta(minutes=5)
-
             if current_time >= slewing_time:
                 print(f"Executing observation for RA: {target_ra}, Dec: {target_dec} at {current_time}")
-                self.check_shutter_status_and_record_observation(observation)
+
+                    # Check and record observations when the shutter is closed
+                self.process_telescope_slew()
                 executed_observations.append(observation)
 
                     # Remove the executed observation from the list
         for executed_observation in executed_observations:
             self.scheduled_observations.remove(executed_observation)
 
-    def on_created(self, event):
-        if not event.is_directory:
-            print(f"New JSON file detected: {event.src_path}")
-            self.process_telescope_slew(event.src_path)
-            self.check_shutter_status_and_record_observation(event.src_path)
-            self.perform_scheduled_observations(event.src_path)
-
-    def on_modified(self, event):
-        if not event.is_directory:
-            print(f"JSON file modified: {event.src_path}")
-            self.process_telescope_slew(event.src_path)
-            self.check_shutter_status_and_record_observation(event.src_path)
-            self.perform_scheduled_observations(event.src_path)
-
-    def watch_telescope_slew_folder(self):
-            """
-            Sets up the file observer to watch for new files in the folder
-            """
-            #set up some filename patterns to watch for and to ignore
-            patterns = ['*observation*.j*']
-            ignore_patterns = ['*acknowledgement*', '*unsafe*']
-            ignore_directories = True
-            case_sensitive = True
-
-            #give these to the event handler
-            event_handler = PatternMatchingEventHandler(patterns=patterns,
-                                    ignore_patterns=ignore_patterns,
-                                    ignore_directories=ignore_directories,
-                                    case_sensitive=case_sensitive
-                                    )
-
-
-            #create the observer
-            
-            observer = Observer()
-            observer.schedule(event_handler, path=json_folder, recursive=False)
-
-            #start the observer
-            observer.start()
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                observer.stop()
-            observer.join()
-
-        
 def get_coordinates_of_ROO_thread(teleobj, coord_folder):
     pythoncom.CoInitialize()  # Initialize COM within the thread
     teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
@@ -268,16 +196,27 @@ def get_coordinates_of_ROO_thread(teleobj, coord_folder):
 
         time.sleep(60)  # Check every minute
     pythoncom.CoUninitialize()  # Uninitialize COM when done
-Coords_thread = threading.Thread(target=get_coordinates_of_ROO_thread, args=(teleobj, coord_folder))
-Coords_thread.start()
-
-# Usage
+Coords_thread = threading.Thread(target=get_coordinates_of_ROO_thread, args=(teleObj, coord_folder))
+Coords_thread.start()       
+            
 if __name__ == "__main__":
-    #Initiate the class
-    Perform_task = TelescopeSlewHandler(json_folder)
-    # Start watching the folder for new JSON files
-    Perform_task.watch_telescope_slew_folder()
+    src_path = "C:\Telescope_Codes\JSON"
+    
+    event_handler = TelescopeSlewHandler()  # Create an instance of your handler
+    observer = watchdog.observers.Observer()
+    observer.schedule(event_handler, path=src_path, recursive=False)
+    observer.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    
+    observer.join()
+
+
 
 # Clean up COM
-pythoncom.CoUninitialize()
+#pythoncom.CoUninitialize()
 
