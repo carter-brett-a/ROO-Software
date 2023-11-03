@@ -1,0 +1,336 @@
+"""
+27 October
+This code creates a multiprocessing socket to allow the telescope to simulatenously perform the following functions:
+1. Detect satellites.
+2. Check for tasks assigned.
+3. Processes these tasks and moves them to a checked folder.
+
+31 October
+Modified to include code from Watchdog.
+1. This code should create observations as csv entries in one single json file.
+2. Multiple json files must be stored in processing folder.
+3. Any new files or tasks must be in pending folder.
+4. After conduncting all processing - including scheduled observations, json files must be transferred to checked folder.
+5. Telescope slew must be conducted through multiprocessing.
+
+Aim of multiprocesses:
+Process 1: Scan for satellites - attatch satellite_detect code.
+Process 2: Check for existing tasks at runtime in pending folder.
+Process 3: Monitor new tasks in pending folder once program live.
+Process 4: Get Coordinates of the ROO Telescope
+Process 5: Check for any new tasks assigned to telescope in pending folder.
+
+"""
+
+# importing the multiprocessing module 
+import multiprocessing 
+import os
+import shutil
+import time
+import watchdog
+import watchdog.observers
+import watchdog.events
+
+
+import datetime
+import json
+from watchdog.observers import Observer
+from watchdog.events import PatternMatchingEventHandler
+
+import win32com.client
+import pythoncom
+
+# new file -> pending tasks -> system observes and places into queue -> processing tasks -> system executes task -> checked tasks -> file execution is
+# pending tasks directory "C:/Users/sarah/OneDrive/Documents/RMIT/Pending_tasks//"
+path = r""
+
+parent_directory = r"C:/Users/sarah/OneDrive/Documents/RMIT//"
+
+# coord_folder = "C:\\Telescope_Codes\\JSON\\Coord"
+coord_folder = r"C:/Users/sarah/OneDrive/Documents/RMIT/Pending_tasks/Coord//"
+
+#folder_to_watch = "C:\\Telescope_Codes\\JSON" 
+pending_tasks_path =  r"C:/Users/sarah/OneDrive/Documents/RMIT/Pending_tasks//"
+processing_tasks_path = r"C:/Users/sarah/OneDrive/Documents/RMIT/Processing_tasks//"
+checked_task_path = r"C:/Users/sarah/OneDrive/Documents/RMIT/Checked_tasks//"
+
+
+    
+# repace wit54h GeoScan code
+def satellite_detect():
+    try:
+        while(True):
+            print("looking for satellites...")
+            time.sleep(1)
+            print("scanning the sky...")
+            time.sleep(1)
+    except KeyboardInterrupt:
+       print("Scan complete")
+
+def get_coordinates_of_ROO_process(coord_folder):
+    pythoncom.CoInitialize()  # Initialize COM within the process
+    teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+    while True:
+        current_time = time.gmtime()  # Get the current time
+
+        # Get RA and Dec coordinates
+        teleobj.GetRaDec()
+        # Get Az and Alt coordinates
+        teleobj.GetAzAlt()
+        Coord = {
+            "Ra": teleobj.dRa,
+            "Dec": teleobj.dDec,
+            "Az": teleobj.dAz,
+            "Alt": teleobj.dAlt,
+            "Time": time.strftime('%Y-%m-%dT%H-%M-%S', current_time)
+        }
+        file_name = time.strftime('%Y-%m-%dT%H-%M-%S', current_time) + '.json'
+        Coord_file_path = os.path.join(coord_folder, f"RaDecCoord_{file_name}")
+        # Ensure the folder exists
+        os.makedirs(coord_folder, exist_ok=True)
+
+        with open(Coord_file_path, 'w') as Coord_file:
+            json.dump(Coord, Coord_file, indent=4)
+
+        time.sleep(60)  # Check every minute
+    pythoncom.CoUninitialize()  # Uninitialize COM when done
+
+def processing_tasks(processing_task_path, checked_task_path, objects):
+    processing_task_path, status = check_for_files(processing_task_path)
+    teleobj, domeObj, camObj, observation, folder_to_watch  = objects
+    if status:
+        print("Processing task...calling process_scheduled_observations")  
+
+        process_scheduled_observations(teleobj, domeObj, camObj, observation, folder_to_watch)
+
+        time.sleep(1)
+
+        print("Task processed! Now moving file to checked folder..")
+
+        move_files(processing_task_path, checked_task_path)
+    else:
+        print("Nothing to process")
+
+
+def process_scheduled_observations(teleobj, domeObj, camObj, observation, folder_to_watch):
+    current_time = datetime.datetime.now()
+    
+    for observation in scheduled_observations:
+        target_datetime, target_ra, target_dec, exposure_time, file_name = observation
+        slewing_time = target_datetime - datetime.timedelta(minutes=5)
+        
+        if current_time >= slewing_time:
+            print(f"Executing observation for RA: {target_ra}, Dec: {target_dec} at {current_time}")
+
+            # Check and record observations when the shutter is closed
+            check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observation, folder_to_watch)
+            # Remove the executed observation from the list
+            scheduled_observations.remove(observation)
+
+def check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observation, folder_path):
+    current_time = datetime.datetime.now()
+    target_datetime, target_ra, target_dec, exposure_time, file_name = observation
+    
+    # Calculate slewing time 5 minutes before the specified time
+    slewing_time = target_datetime - datetime.timedelta(minutes=5)
+    # Doing a shutter status check
+    # Shutter status (0 = open, 1 = closed, 2 = opening, 3 = closing, from trial and error)
+    stat = domeObj.ShutterStatus
+
+    if stat != 0:
+        # Record the observation as "Image not captured due to an unsafe shutter status"
+        observation_data = {
+            "status": "unsafe_shutter",
+            "target_ra": target_ra,
+            "target_dec": target_dec,
+            "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S')
+        }
+
+        observation_file_path = os.path.join(folder_path, f"unsafe_shutter_{file_name}")
+        with open(observation_file_path, 'w') as observation_file:
+            json.dump(observation_data, observation_file, indent=4)
+
+        print("Observation saved as unsafe due to shutter status.")
+    else:
+        # Wait for the specified time to slew - commented out as slewing time check already undertaken by the other subroutine
+        # while datetime.datetime.now() <= slewing_time:
+        #     pass
+        # Slew to the specified location
+        print(f"Slewing to RA: {target_ra}, Dec: {target_dec} at {slewing_time}")
+        teleobj.SlewToRaDec(target_ra, target_dec, 'Ra_%d_Dec_%d' % (target_ra, target_dec))
+        while teleobj.IsSlewComplete != 1:
+            pass
+        print("Telescope is in position.")
+            
+        # Wait for the specified time to capture an image
+        while datetime.datetime.now() < target_datetime:
+            pass
+
+        # Check if the exposure time exceeds the maximum allowed (5 seconds)
+        # Throwing an error at the moment, recognizes exposure_time as a string
+        if exposure_time <= 5.0:
+            # Set the camera exposure time
+            camObj.ExposureTime = exposure_time
+            # Capture 5 images and save them to the specified image folder
+            for i in range(5):
+                # Capture an image
+                print(f"Capturing image {i + 1} with exposure time {exposure_time} seconds...")
+                camObj.TakeImage()
+
+                # Record the observation as "Image captured"
+                observation_data = {
+                    "status": "image_captured",
+                    "target_ra": target_ra,
+                    "target_dec": target_dec,
+                    "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
+                    "exposure_time": exposure_time
+                }
+
+                observation_file_path = os.path.join(folder_path, f"image_captured_{file_name}_image_{i}.json")
+                with open(observation_file_path, 'w') as observation_file:
+                    json.dump(observation_data, observation_file, indent=4)
+
+                print(f"Image {i + 1} captured and saved.")
+        else:
+            # Exposure time exceeds the maximum allowed, record as "Exposure time exceeded"
+            observation_data = {
+                "status": "exposure_time_exceeded",
+                "target_ra": target_ra,
+                "target_dec": target_dec,
+                "observation_time": current_time.strftime('%Y-%m-%dT%H:%M:%S'),
+                "exposure_time": exposure_time
+            }
+
+            observation_file_path = os.path.join(folder_path, f"exposure_time_exceeded_{file_name}")
+            with open(observation_file_path, 'w') as observation_file:
+                json.dump(observation_data, observation_file, indent=4)
+
+            print(f"Exposure time {exposure_time} seconds exceeded.")
+
+def creating_folders(directory):
+    # change directory here
+    path = os.path.join(parent_directory, directory)
+    try:
+        os.makedirs(path, exist_ok= False)
+        print("Directory '% s' created" % directory)
+    except OSError as error:
+          print("Directory '%s' already exists" % directory)
+    return directory
+
+# Checks if there are any files in pending directory at runtime
+def print_pending_task_status():
+    old_path, status = check_for_files(pending_tasks_path)
+    print("Pending tasks: ", status)
+    if(status):
+        move_files(old_path, processing_tasks_path)
+        print("moving files")
+        check_for_files(old_path)
+    else:
+        print("no files found in printing function")
+
+def move_files(old_path, new_path):
+    for file_name in os.listdir(old_path):
+        print("Found: ", file_name)
+        source = old_path + file_name
+        destination = new_path +file_name
+        shutil.move(source, destination)
+        print("Moved: ", file_name)
+
+
+#checking if files already exist
+def check_for_files(path):
+    if len(os.listdir(path)) == 0:
+        print("No files found")
+        return path, False
+    else:
+        print("Files found!")
+        return path, True
+    
+
+# Watchdog event handler
+# Checking if there is a change in folders
+def directory_status(src_path):
+    event_handler = Handler()
+    observer = watchdog.observers.Observer()
+    observer.schedule(event_handler, path=src_path, recursive=True)
+    observer.start()
+    try:
+        while True:
+            print("Watchdog observing..")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+    
+
+class Handler(watchdog.events.PatternMatchingEventHandler):
+    
+    def __init__(self):
+        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*'], ignore_directories=True, case_sensitive=False)
+ 
+    def on_created(self, event):
+        print("Watchdog received created event - % s." % event.src_path)
+        print_pending_task_status() 
+        print("Watchdog received modified event - % s." % event.src_path)
+        processing_tasks(processing_tasks_path, checked_task_path, objects)
+
+if __name__ == "__main__": 
+    
+    pythoncom.CoInitialize()
+    telescope = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+    teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+    camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
+    domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
+    domeObj.Connected = True
+
+    creating_folders("Checked_tasks")
+    creating_folders("Pending_tasks") 
+    creating_folders("Processing_tasks")
+    creating_folders("Pending_tasks/Coord")
+
+    manager = multiprocessing.Manager()
+    scheduled_observations = manager.list()
+
+    folder_to_watch  = parent_directory
+    observation = ""
+    objects = teleobj, domeObj, camObj, observation, folder_to_watch  
+
+    # scan for satellites - GEO Scan code
+    p1 = multiprocessing.Process(target=satellite_detect) 
+
+    # Check for any existing tasks at the start of the program
+    p2 = multiprocessing.Process(target=print_pending_task_status) 
+
+    # Process the tasks: process observations -> calls process_scheduled_observations
+    p3 = multiprocessing.Process(target=processing_tasks, args=(processing_tasks_path,checked_task_path, objects)) 
+    
+    # Process another task: get coordinates of ROO Process
+    p4 = multiprocessing.Process(target=get_coordinates_of_ROO_process, args=(coord_folder)) 
+
+    # Monitor for any new assigned tasks for the telescope
+    p5 = multiprocessing.Process(target=directory_status, args=(parent_directory,)) 
+
+    
+	# starting processes
+    p1.start() 
+    p2.start() 
+    p3.start()
+    p4.start()
+    p5.start()
+ 
+    
+
+    # Join processes once they're all complete
+    p1.join() 
+    p2.join() 
+    p3.join()
+    p4.join()
+    p5.join()
+
+    # All processes finished 
+    print("Done!") 
+
+    # Clean up COM
+    pythoncom.CoUninitialize()
+
