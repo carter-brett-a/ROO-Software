@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Sep 26 20:55:14 2023
-
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Tue Feb  9 13:56:05 2021
 
 @author: Dr Brett Carter and Maggie Williams, RMIT University, as part of Maggie's work experience with RMIT and Saber Astronautics, and Sai Vallapureddy as part of his PhD works
@@ -19,7 +13,9 @@ to capture the wider GEO region (e.g., searching for non-zero inclinations).
 This version of the code has also been developed to automatically upload JSON data up to the UDL (Sai helped with this). The code also has a "pause until safe" routine that's triggered by a 
 closed/closing shutter... it also checks for power issues...
 
-This version also includes added capability of pausing the GEO search using JSON files for active tasking purposes (Kaifur Rashed helped with this).
+This version also includes added capability of pausing the GEO search using JSON files for active tasking purposes (Kaifur Rashed helped with this). 
+The JSON files can have either RA/Dec or Az/El as coordinates. This version is for demonstration purposes only, i.e. it does not capture images and is designed to operate with the dome closed.
+
 
 This is the primary operational code for the SACT exercise, and is actually our first intended routine GEO monitoring code for the daily operations of ROO (eventually)
 
