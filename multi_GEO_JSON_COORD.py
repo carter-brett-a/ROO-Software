@@ -1385,7 +1385,7 @@ if __name__ == "__main__":
     
 	# starting processes
     satellite_detect_process.start() 
-	coords_process.start()
+    coords_process.start()
     p4.start()
     p3.start()
     
