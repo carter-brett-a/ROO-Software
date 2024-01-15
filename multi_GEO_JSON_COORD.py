@@ -1392,7 +1392,7 @@ if __name__ == "__main__":
 
     # Join processes once they're all complete
     satellite_detect_process.join() 
-	coords_process.join() 
+    coords_process.join() 
     p3.join()
     p4.join()
 
