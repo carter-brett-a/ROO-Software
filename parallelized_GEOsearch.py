@@ -14,7 +14,6 @@ import time
 import watchdog
 import watchdog.observers
 import watchdog.events
-from watchdog.events import FileSystemEventHandler
 import numpy as np
 import math
 import matplotlib.pyplot as plt
@@ -61,10 +60,14 @@ acos = math.acos
 
 teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
+#path to JSON request files
+folder_path = "C:\Telescope_Data\OneDrive - RMIT University\Science\Telescope\Data_subset\JSON"
+#path to folder where JSON files with coordinates of ROO are saved
+coord_folder = "C:\Telescope_Data\OneDrive - RMIT University\Science\Telescope\Data_subset\coords"
 
 
 
-def satellite_detect():
+def satellite_detect(image_dir, filename, png_key, csv_key):
     #maximum eccentricity for ellipse around source to be considered a possible satellite
     max_ecc = 0.75
 
@@ -206,11 +209,11 @@ def satellite_detect():
            return(False,None,None) 
         else:
            return(True, xpos, ypos)
-		   
+           
 def process_images_and_extract_angles(last_image_dir, last_image, i, imagelinkObj, azimuth, elev, obs, expTime):
     try:
         possible_sats, xpos, ypos = satellite_detect(last_image_dir, last_image, True, True)
-		#initialising angles data (in first of image batch) - this line here takes into account possibility that first image rego fails
+        #initialising angles data (in first of image batch) - this line here takes into account possibility that first image rego fails
         if i == 1:
             ang_data = Table(names=('Time', 'XPOS', 'YPOS', 'RA', 'DEC'), dtype=('S2', 'f4', 'f4', 'd', 'd'))
 
@@ -255,28 +258,28 @@ def process_images_and_extract_angles(last_image_dir, last_image, i, imagelinkOb
 
                     ang_data.add_row([date_obs_corr, xpos[j], ypos[j], sky.ra.deg, sky.dec.deg])
             if rego_fail_count >= 3:
-				azi2.append(azimuth)
-				elev2.append(elev[index])
-				repeat = True
+                azi2.append(azimuth)
+                elev2.append(elev[index])
+                repeat = True
             
             #only writing the data to file once the batch of 5 images have been taken, providing there are some angles that were extracted
-		if i == image_num and any_sats == True:
-			ang_data.write(saved_csvs+"/"+"angles"+fit_name+".csv",format = "ascii.csv")
-			print("Angles saved")
+        if i == image_num and any_sats == True:
+            ang_data.write(saved_csvs+"/"+"angles"+fit_name+".csv",format = "ascii.csv")
+            print("Angles saved")
             
             
-			print("Performing data cleaning...")
-			cleaned_csv = data_cleaning(saved_csvs,"angles"+fit_name+".csv")
+            print("Performing data cleaning...")
+            cleaned_csv = data_cleaning(saved_csvs,"angles"+fit_name+".csv")
             
-			if cleaned_csv != False:
-				print("Now converting to JSON...")
-				json_dat = csv_2_json(cleaned_csv,obs,expTime)
+            if cleaned_csv != False:
+                print("Now converting to JSON...")
+                json_dat = csv_2_json(cleaned_csv,obs,expTime)
                 
     
-	    index += 1
+        #index += 1
         return ang_data
     except Exception as e:
-        print(f"Error processing image {image_file}: {e}")
+        print(f"Error processing image {last_image}: {e}")
         return None
 
 
@@ -573,6 +576,7 @@ def pause_til_safe():
     print(time.ctime())
     print("Shutter reopened... back to operations")
     #process_json_files_thread(folder_path, scheduled_observations)
+    #need to check if the line below is essential
     perform_scheduled_observations(teleobj, domeObj, scheduled_observations, folder_path)
         
     
@@ -807,86 +811,6 @@ def post_to_udl_json_data(udl_endpoint, username, unecrypted_password, json_data
         print("Completed data access at {url}".format(url=udl_endpoint))
     return response
 
-
-
-
-
-if long_ran[1] < long_ran[0]:
-    print("The longitude range must start with the smaller value first")
-    sys.exit()
-###################################
-###################################
-
-cos=math.cos
-sin=math.sin
-pi=math.pi
-
-for i in angles:
-    X_i = r_geo * cos(i*pi/180.)
-    Y_i = r_geo * sin(i*pi/180.)
-
-    #position vector of GEO satellite at this angle
-    r_sat = [X_i, Y_i, 0]
-
-    #Performing calculation
-    ans = r_to_azi_elev(r_sat,obs)
-
-    #ans[2] is the satellite longitude (passed testing... looks good)
-
-    #only considering the angles above the minimum elevation, and the range of azimuths given by azi_ran (above)
-    
-    #for situation where we're starting west of north (i.e., 270-360 deg azimuth) and finishing to the east of north
-    if azi_ran[0] > azi_ran[1]:
-        if ans[1] >= min_elev and ((ans[0] >= azi_ran[0] and ans[0] < 360) or (ans[0] >=0 and ans[0] <= azi_ran[1])) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
-            azi.append(ans[0])
-            elev.append(ans[1])
-            sat_long.append(ans[2])
-    # the situation where both the start and finishing points are to the east or west
-    else:
-        if ans[1] >= min_elev and (ans[0] >= azi_ran[0] and ans[0] <= azi_ran[1]) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
-            azi.append(ans[0])
-            elev.append(ans[1])
-            sat_long.append(ans[2])
-
-
-#if we want to scan East to West
-#azi.reverse()
-#elev.reverse()
-
-print(azi)
-print('***')
-print(elev)
-print('***')
-print(sat_long)
-#sys.exit()
-
-
-#now, the trick is that perhaps you want say a couple of degs either side of the "base elevation" array, which is where the GEO belt is
-d_elev_max = 1.5
-delta_elev = 0.5
-
-#d_elev_max = 0.5
-#delta_elev = 0.5
-
-#for scanning around the Geo belt
-#d_elev = np.arange(d_elev_max*-1,(d_elev_max+delta_elev),delta_elev)
-
-#for scanning only the Geo belt
-d_elev = np.zeros(1)
-
-
-#initialising indicies to help extract the correct azimuth and elevation values
-index = 0
-
-count = 0
-repeat = True
-azi2 = []
-elev2 = []
-# Brett's attempt at fixing issues aroubd failed regos, not working.. need to circle back
-#while repeat == True:
-    
-    #if count == 0:
-     #   repeat = False
     
 def get_coordinates_of_ROO_process(coord_folder, teleobj):
     #pythoncom.CoInitialize()  # Initialize COM within the process
@@ -924,7 +848,7 @@ def process_json_file(file_name, folder_path, scheduled_observations):
             meas_type = data['meas_type']
             target_time = data['time']
             exposure_time = float(data['exposure time'])
-			sidereal_tracking = data['sidereal_tracking']
+            sidereal_tracking = data['sidereal_tracking']
 
             if 'ra' in data and 'dec' in data:
                 target_ra = data['ra']
@@ -1003,7 +927,7 @@ def check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observ
                 while teleobj.IsSlewComplete != 1:
                     pass
                 print("Telescope is in position.")
-				if sidereal_tracking == 1:
+                if sidereal_tracking == 1:
                     teleObj.SetTracking(1, 0, 0, 0)
                 else:
                     teleObj.SetTracking(0, 1, 0, 0)
@@ -1063,7 +987,7 @@ def check_shutter_status_and_record_observation(teleobj, domeObj, camObj, observ
                 print(f"Exposure time {exposure_time} seconds exceeded.")
     except Exception as e:
         print(f"Error processing observation: {e}")
-		
+        
 def perform_scheduled_observations(teleobj, domeObj, scheduled_observations, folder_path):
     #while True:
     current_time = datetime.datetime.now()
@@ -1094,7 +1018,7 @@ def perform_scheduled_observations(teleobj, domeObj, scheduled_observations, fol
 def watch_JSON_folder(folder_path):
     event_handler = Handler()
     observer = watchdog.observers.Observer()
-    observer.schedule(event_handler, path=JSON_folder, recursive=True)
+    observer.schedule(event_handler, path=folder_path, recursive=True)
     observer.start()
     try:
         while True:
@@ -1109,70 +1033,70 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
         watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*observation*.j*'], ignore_directories=True, case_sensitive=False)
  
     def on_created(self, event):
-		print(f"New JSON file detected: {event.JSON_folder}")
+        print(f"New JSON file detected: {event.folder_path}")
         process_json_file(event)
         perform_scheduled_observations(event)
 
 if __name__ == "__main__": 
-	start_time = time.time()
-	start_time_str = time.asctime()
+    start_time = time.time()
+    start_time_str = time.asctime()
     
 #######################################
 #TheSkyX objects
-	skyChartObj = win32com.client.Dispatch("TheSky64.sky6StarChart")
+    skyChartObj = win32com.client.Dispatch("TheSky64.sky6StarChart")
 
 #TheskyX Telescope
-	teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
-	teleObj.Connect()
+    teleObj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
+    teleObj.Connect()
 
 
 #TheSkyX Camera
-	camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
-	camObj.Connect()
+    camObj = win32com.client.Dispatch("TheSky64.ccdsoftCamera")
+    camObj.Connect()
 
 #actual ASCOM dome object (for shutter status checks)
-	domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
-	domeObj.Connected = True
+    domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
+    domeObj.Connected = True
 
 #setting up SkyX's imagelink
-	imagelinkObj = win32com.client.Dispatch("TheSky64.ImageLink")
-	imagelinkObj.Scale = 1.1 
+    imagelinkObj = win32com.client.Dispatch("TheSky64.ImageLink")
+    imagelinkObj.Scale = 1.1 
 
 # exposure time (in sec) of each image
 # This expTime needs to be passed on to the JSON execution routine
-	expTime = 0.2 #(for testing)
+    expTime = 0.2 #(for testing)
 
 
 #setting camera exposure time
-	camObj.ExposureTime = expTime
+    camObj.ExposureTime = expTime
 
 #######################################
 
 #ROO location (geodetic latitude then longitude, then height (in km))
 #obs = [-(37+(40/60)+(50.32/3600)), 145+(3/60)+(41.91/3600), 0.1]  #(ROO)
-	obs = [-37.680589141, 145.061634327, 0.155083]  #surveying results for ROO
+    obs = [-37.680589141, 145.061634327, 0.155083]  #surveying results for ROO
 
 #minimum elevation considered
-	min_elev = 14
+    min_elev = 14
 
 #number of images for each location
 #(need to think about this... getting about 5.8 images per minute using this code...)
-	image_num = 5
+    image_num = 5
 #image_num = 3
 
-	angle_ran = [-180, 180] #this angle range is essentially the range of (sidereal) longitudes of GEO objects we'd like to explore (in ECI)
-	delta_angle = 0.5   #in degrees, should be determined by ~ size of camera FoV (with the focal reducer, 0.73 deg x 0.59 deg)
-	angles = np.arange((angle_ran[1]-angle_ran[0])/delta_angle)*delta_angle + angle_ran[0]
+    angle_ran = [-180, 180] #this angle range is essentially the range of (sidereal) longitudes of GEO objects we'd like to explore (in ECI)
+    delta_angle = 0.5   #in degrees, should be determined by ~ size of camera FoV (with the focal reducer, 0.73 deg x 0.59 deg)
+    angles = np.arange((angle_ran[1]-angle_ran[0])/delta_angle)*delta_angle + angle_ran[0]
 
-	r_geo = 42164.0   #GEO radius
+    r_geo = 42164.0   #GEO radius
 
 #initialising lists
-	azi = []
-	elev = []
-	sat_long = []
+    azi = []
+    elev = []
+    sat_long = []
 
 #azimuth range for GEO search 270,90 for full search, and if only a portion is to be searched, this can be changed here...
-	azi_ran = [309, 90] #Building blocks anything west of 308 azimuth, so it's a good starting point
+    azi_ran = [309, 90] #Building blocks anything west of 308 azimuth, so it's a good starting point
 #azi_ran = [42,47]
 
 ###################################
@@ -1182,61 +1106,61 @@ if __name__ == "__main__":
 #Important note... the first item must be less than the second item
 #long_ran = [-180,180]
 #long_ran = [0,180]
-	long_ran = [90,180]
+    long_ran = [90,180]
 
-	if long_ran[1] < long_ran[0]:
-		print("The longitude range must start with the smaller value first")
-		sys.exit()
+    if long_ran[1] < long_ran[0]:
+        print("The longitude range must start with the smaller value first")
+        sys.exit()
 ###################################
 ###################################
 
-	cos=math.cos
-	sin=math.sin
-	pi=math.pi
+    cos=math.cos
+    sin=math.sin
+    pi=math.pi
 
-	for i in angles:
-		X_i = r_geo * cos(i*pi/180.)
-		Y_i = r_geo * sin(i*pi/180.)
+    for i in angles:
+        X_i = r_geo * cos(i*pi/180.)
+        Y_i = r_geo * sin(i*pi/180.)
 
     #position vector of GEO satellite at this angle
-		r_sat = [X_i, Y_i, 0]
+        r_sat = [X_i, Y_i, 0]
 
     #Performing calculation
-		ans = r_to_azi_elev(r_sat,obs)
+        ans = r_to_azi_elev(r_sat,obs)
 
     #ans[2] is the satellite longitude (passed testing... looks good)
 
     #only considering the angles above the minimum elevation, and the range of azimuths given by azi_ran (above)
     
     #for situation where we're starting west of north (i.e., 270-360 deg azimuth) and finishing to the east of north
-		if azi_ran[0] > azi_ran[1]:
-			if ans[1] >= min_elev and ((ans[0] >= azi_ran[0] and ans[0] < 360) or (ans[0] >=0 and ans[0] <= azi_ran[1])) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
-				azi.append(ans[0])
-				elev.append(ans[1])
-				sat_long.append(ans[2])
+        if azi_ran[0] > azi_ran[1]:
+            if ans[1] >= min_elev and ((ans[0] >= azi_ran[0] and ans[0] < 360) or (ans[0] >=0 and ans[0] <= azi_ran[1])) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
+                azi.append(ans[0])
+                elev.append(ans[1])
+                sat_long.append(ans[2])
     # the situation where both the start and finishing points are to the east or west
-		else:
-			if ans[1] >= min_elev and (ans[0] >= azi_ran[0] and ans[0] <= azi_ran[1]) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
-				azi.append(ans[0])
-				elev.append(ans[1])
-				sat_long.append(ans[2])
+        else:
+            if ans[1] >= min_elev and (ans[0] >= azi_ran[0] and ans[0] <= azi_ran[1]) and (long_ran[0] <= ans[2] and long_ran[1] >= ans[2]):
+                azi.append(ans[0])
+                elev.append(ans[1])
+                sat_long.append(ans[2])
 
 
 #if we want to scan East to West
 #azi.reverse()
 #elev.reverse()
 
-	print(azi)
-	print('***')
-	print(elev)
-	print('***')
-	print(sat_long)
+    print(azi)
+    print('***')
+    print(elev)
+    print('***')
+    print(sat_long)
 #sys.exit()
 
 
 #now, the trick is that perhaps you want say a couple of degs either side of the "base elevation" array, which is where the GEO belt is
-	d_elev_max = 1.5
-	delta_elev = 0.5
+    d_elev_max = 1.5
+    delta_elev = 0.5
 
 #d_elev_max = 0.5
 #delta_elev = 0.5
@@ -1245,86 +1169,86 @@ if __name__ == "__main__":
 #d_elev = np.arange(d_elev_max*-1,(d_elev_max+delta_elev),delta_elev)
 
 #for scanning only the Geo belt
-	d_elev = np.zeros(1)
+    d_elev = np.zeros(1)
 
 
 #initialising indicies to help extract the correct azimuth and elevation values
-	index = 0
+    index = 0
 
-	count = 0
-	repeat = True
-	azi2 = []
-	elev2 = []
+    count = 0
+    repeat = True
+    azi2 = []
+    elev2 = []
 # Brett's attempt at fixing issues aroubd failed regos, not working.. need to circle back
 #while repeat == True:
     
     #if count == 0:
      #   repeat = False
-	for x in azi:
-		azimuth = x
+    for x in azi:
+        azimuth = x
     
-		print("Telescope is currently scanning at azimuth ",azimuth)
+        print("Telescope is currently scanning at azimuth ",azimuth)
     
-		for y in d_elev:
-			perform_scheduled_observations(teleobj, domeObj, scheduled_observations, folder_path) # executing JSON file if any
+        for y in d_elev:
+            perform_scheduled_observations(teleobj, domeObj, scheduled_observations, folder_path) # executing JSON file if any
     
-			elevation = elev[index]+y
+            elevation = elev[index]+y
     
-			print("Elevation ",elevation)
+            print("Elevation ",elevation)
     
         #command to slew telescope
-			try:
+            try:
         
-				teleObj.SlewToAzAlt(azimuth, elevation, 'Az_%d_Elev_%d' % (azimuth, elevation))
+                teleObj.SlewToAzAlt(azimuth, elevation, 'Az_%d_Elev_%d' % (azimuth, elevation))
     
-			except com_error as err:
+            except com_error as err:
         
-				if err.excepinfo[5] == -2147198493:
+                if err.excepinfo[5] == -2147198493:
         
-					print("Encountered hard slew limit error... continuing on to next position")
+                    print("Encountered hard slew limit error... continuing on to next position")
             
-					continue
+                    continue
         
-				else:
-					raise err
+                else:
+                    raise err
     
-			if teleObj.Asynchronous == True:
-				while teleObj.IsSlewComplete == False:
-					time.sleep(0.1)
+            if teleObj.Asynchronous == True:
+                while teleObj.IsSlewComplete == False:
+                    time.sleep(0.1)
                 #process_json_files_thread(folder_path, scheduled_observations)
     
         #turning tracking off (automatically goes to sidreal tracking after slew)
-			teleObj.SetTracking(0,1,0,0)
+            teleObj.SetTracking(0,1,0,0)
 
         # light exposure
         #print("Taking exposure... NOOOOTT (we're testing it!!!)")
         #time.sleep(0.1)
     
         #initialising the any_sats flag... (new, this could be where I was stuffing up earlier...)
-			any_sats = False
+            any_sats = False
     
         #initialising the number of imagess that failed registration
-			rego_fail_count = 0
-			for i in range(1,image_num+1):
+            rego_fail_count = 0
+            for i in range(1,image_num+1):
         
             #Doing a shutter status check
             #Shutter status ( 0 = open, 1 = closed, 2 = opening, 3 - closing, from trial and error)
-				stat = domeObj.ShutterStatus
+                stat = domeObj.ShutterStatus
 
-				if stat != 0:
-					pause_til_safe()
+                if stat != 0:
+                    pause_til_safe()
         
-				camObj.TakeImage()
-				if camObj.Asynchronous == True:
-					while camObj.IsExposureComplete == False:
-						time.sleep(0.1)
+                camObj.TakeImage()
+                if camObj.Asynchronous == True:
+                    while camObj.IsExposureComplete == False:
+                        time.sleep(0.1)
         
-				last_image = camObj.LastImageFileName
-				last_image_dir = camObj.AutoSavePath
+                last_image = camObj.LastImageFileName
+                last_image_dir = camObj.AutoSavePath
         
-				saved_csvs = last_image_dir+'/'+'CSVs'
+                saved_csvs = last_image_dir+'/'+'CSVs'
             #just extracting the filename without the path for use in the CSV and PNG naming later on...
-				fit_name = os.path.basename(last_image)
+                fit_name = os.path.basename(last_image)
         
 
 # part of the code handling failed regos. 
@@ -1334,19 +1258,19 @@ if __name__ == "__main__":
        # index = 0
         #count = 1
 
-	print("Finished GEO search pattern")
+    print("Finished GEO search pattern")
 
-	end_time = time.time()
-	end_time_str = time.asctime()
+    end_time = time.time()
+    end_time_str = time.asctime()
 
-	print("Started at %s" % start_time_str)
-	print("Finished at %s" % end_time_str)
+    print("Started at %s" % start_time_str)
+    print("Finished at %s" % end_time_str)
 
 
-	duration = end_time - start_time
-	print("Duration: %g seconds" % duration)
-	print("Duration: %g minutes" % (duration/60.))
-	print("Duration: %g hours" % (duration/3600.))
+    duration = end_time - start_time
+    print("Duration: %g seconds" % duration)
+    print("Duration: %g minutes" % (duration/60.))
+    print("Duration: %g hours" % (duration/3600.))
 
     sat_detect_processes = []
     image_num = 5  # Update with the number of images to process in a batch
@@ -1365,14 +1289,14 @@ if __name__ == "__main__":
 
     # Check for any existing tasks at the start of the program
     #p2 = multiprocessing.Process(target=print_pending_task_status) 
-	    # Start the coordinates process
+        # Start the coordinates process
     coords_process = multiprocessing.Process(target=get_coordinates_of_ROO_process, args=(coord_folder, teleobj))
     
     # Monitor for any new assigned tasks for the telescope
-    JSON_process = multiprocessing.Process(target=watch_JSON_folder, args=(JSON_folder)) 
+    JSON_process = multiprocessing.Process(target=watch_JSON_folder, args=(folder_path)) 
 
     
-	# starting processes
+    # starting processes
     coords_process.start()
     JSON_process.start()
     
@@ -1380,7 +1304,7 @@ if __name__ == "__main__":
     # Join processes once they're all complete
     coords_process.join() 
     JSON_process.join()
-	    # Wait for all processes to finish
+        # Wait for all processes to finish
     for sat_detect_process in sat_detect_processes:
         sat_detect_process.join()
 
