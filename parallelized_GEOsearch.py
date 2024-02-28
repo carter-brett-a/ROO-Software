@@ -61,9 +61,9 @@ acos = math.acos
 teleobj = win32com.client.Dispatch("TheSky64.sky6RASCOMTele")
 domeObj = win32com.client.Dispatch("Ascom.ScopeDomeUSBDome.DomeLS")
 #path to JSON request files
-folder_path = "C:\Telescope_Data\OneDrive - RMIT University\Science\Telescope\Data_subset\JSON"
+folder_path = "C:\Telescope_Data\JSON"
 #path to folder where JSON files with coordinates of ROO are saved
-coord_folder = "C:\Telescope_Data\OneDrive - RMIT University\Science\Telescope\Data_subset\coords"
+coord_folder = "C:\Telescope_Data\coord"
 
 
 
@@ -209,7 +209,26 @@ def satellite_detect(image_dir, filename, png_key, csv_key):
            return(False,None,None) 
         else:
            return(True, xpos, ypos)
-           
+def watch_fits_folder(last_image_dir):
+    event_handler = ImgHandler()
+    observer = watchdog.observers.Observer()
+    observer.schedule(event_handler, path=last_image_dir, recursive=True)
+    observer.start()
+    try:
+        while True:
+            #print("Watchdog observing..")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+class ImgHandler(watchdog.events.PatternMatchingEventHandler):
+    
+    def __init__(self):
+        watchdog.events.PatternMatchingEventHandler.__init__(self, patterns=['*.fits'], ignore_directories=True, case_sensitive=False)
+ 
+    def on_created(self, event):
+        print(f"New FITS file detected: {event.last_image_dir}")
+        process_images_and_extract_angles(event)         
 def process_images_and_extract_angles(last_image_dir, last_image, i, imagelinkObj, azimuth, elev, obs, expTime):
     try:
         possible_sats, xpos, ypos = satellite_detect(last_image_dir, last_image, True, True)
@@ -837,9 +856,9 @@ def get_coordinates_of_ROO_process(coord_folder, teleobj):
         with open(Coord_file_path, 'w') as Coord_file:
             json.dump(Coord, Coord_file, indent=4)
 
-        time.sleep(1)  # Check every second
+        time.sleep(5)  # Check every 5 seconds
     #pythoncom.CoUninitialize()  # Uninitialize COM when done
-
+scheduled_observations = []
 def process_json_file(file_name, folder_path, scheduled_observations):
     try:
         json_file_path = os.path.join(folder_path, file_name)
@@ -1022,7 +1041,7 @@ def watch_JSON_folder(folder_path):
     observer.start()
     try:
         while True:
-            print("Watchdog observing..")
+            #print("Watchdog observing..")
             time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
@@ -1035,12 +1054,9 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
     def on_created(self, event):
         print(f"New JSON file detected: {event.folder_path}")
         process_json_file(event)
-        perform_scheduled_observations(event)
+        #perform_scheduled_observations(event)
 
-if __name__ == "__main__": 
-    start_time = time.time()
-    start_time_str = time.asctime()
-    
+if __name__ == "__main__":
 #######################################
 #TheSkyX objects
     skyChartObj = win32com.client.Dispatch("TheSky64.sky6StarChart")
@@ -1081,16 +1097,9 @@ if __name__ == "__main__":
 
 #number of images for each location
 #(need to think about this... getting about 5.8 images per minute using this code...)
-    image_num = 5
+    image_num = 5 # Update with the number of images to process in a batch
 #image_num = 3
-
-    angle_ran = [-180, 180] #this angle range is essentially the range of (sidereal) longitudes of GEO objects we'd like to explore (in ECI)
-    delta_angle = 0.5   #in degrees, should be determined by ~ size of camera FoV (with the focal reducer, 0.73 deg x 0.59 deg)
-    angles = np.arange((angle_ran[1]-angle_ran[0])/delta_angle)*delta_angle + angle_ran[0]
-
-    r_geo = 42164.0   #GEO radius
-
-#initialising lists
+    #initialising lists
     azi = []
     elev = []
     sat_long = []
@@ -1107,6 +1116,41 @@ if __name__ == "__main__":
 #long_ran = [-180,180]
 #long_ran = [0,180]
     long_ran = [90,180]
+
+    angle_ran = [-180, 180] #this angle range is essentially the range of (sidereal) longitudes of GEO objects we'd like to explore (in ECI)
+    delta_angle = 0.5   #in degrees, should be determined by ~ size of camera FoV (with the focal reducer, 0.73 deg x 0.59 deg)
+    angles = np.arange((angle_ran[1]-angle_ran[0])/delta_angle)*delta_angle + angle_ran[0]
+
+    r_geo = 42164.0   #GEO radius
+    sat_detect_processes = []
+    last_image = camObj.LastImageFileName
+    last_image_dir = camObj.AutoSavePath
+     
+
+    for i in range(1, image_num + 1):
+        last_image = camObj.LastImageFileName
+
+        sat_detect_process = multiprocessing.Process(
+            target=watch_fits_folder,
+            args=(last_image_dir, last_image, i, imagelinkObj, azi, elev, obs, expTime)
+        )
+        sat_detect_processes.append(sat_detect_process)
+        sat_detect_process.start()
+
+
+
+
+        # Start the coordinates process
+    coords_process = multiprocessing.Process(target=get_coordinates_of_ROO_process, args=(coord_folder, teleobj))
+    
+    # Monitor for any new assigned tasks for the telescope
+    JSON_process = multiprocessing.Process(target=watch_JSON_folder, args=(folder_path)) 
+
+    
+    # starting processes
+    coords_process.start()
+    JSON_process.start()
+    
 
     if long_ran[1] < long_ran[0]:
         print("The longitude range must start with the smaller value first")
@@ -1271,43 +1315,14 @@ if __name__ == "__main__":
     print("Duration: %g seconds" % duration)
     print("Duration: %g minutes" % (duration/60.))
     print("Duration: %g hours" % (duration/3600.))
-
-    sat_detect_processes = []
-    image_num = 5  # Update with the number of images to process in a batch
-
-    for i in range(1, image_num + 1):
-        last_image = camObj.LastImageFileName
-
-        sat_detect_process = multiprocessing.Process(
-            target=process_images_and_extract_angles,
-            args=(last_image_dir, last_image, i, imagelinkObj, azimuth, elev, obs, expTime)
-        )
-        sat_detect_processes.append(sat_detect_process)
-        sat_detect_process.start()
-
-
-
-    # Check for any existing tasks at the start of the program
-    #p2 = multiprocessing.Process(target=print_pending_task_status) 
-        # Start the coordinates process
-    coords_process = multiprocessing.Process(target=get_coordinates_of_ROO_process, args=(coord_folder, teleobj))
-    
-    # Monitor for any new assigned tasks for the telescope
-    JSON_process = multiprocessing.Process(target=watch_JSON_folder, args=(folder_path)) 
-
-    
-    # starting processes
-    coords_process.start()
-    JSON_process.start()
-    
-
     # Join processes once they're all complete
     coords_process.join() 
     JSON_process.join()
         # Wait for all processes to finish
     for sat_detect_process in sat_detect_processes:
-        sat_detect_process.join()
+        sat_detect_process.join() 
+    start_time = time.time()
+    start_time_str = time.asctime()
 
-    # All processes finished 
-    #print("Done!") 
 
+   
